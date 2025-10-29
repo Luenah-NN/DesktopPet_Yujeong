@@ -26,7 +26,7 @@ jobs:
         run: |
           if (!(Test-Path app\version_info.txt)) {
             New-Item -ItemType Directory -Force -Path app | Out-Null
-@"
+"@
 VSVersionInfo(
   ffi=FixedFileInfo(
     filevers=(1, 0, 0, 0),

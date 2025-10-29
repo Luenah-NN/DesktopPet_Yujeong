@@ -6,7 +6,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 
 CHAR_NAME = "Yujeong"
 BG_MODE   = "rembg"     # "chroma" or "rembg"
-SCALE     = 0.50        # 캐릭터 크기 0.6배
+SCALE     = 0.60        # 캐릭터 크기 0.6배
 BASE_DIR  = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 
 # rembg 누락 프레임 대비: 순백 모서리 감지시 1회성 chroma 마스크

@@ -86,8 +86,19 @@ jobs:
             --add-data "assets;assets" `
             --add-data "icons;icons"
 
+      # ✅ secrets를 if에서 직접 쓰지 않고, 먼저 체크해서 출력값으로 노출
+      - name: Check signing secrets
+        id: signing
+        shell: bash
+        run: |
+          if [ -n "${{ secrets.WIN_CSC_PFX }}" ] && [ -n "${{ secrets.WIN_CSC_PFX_PASSWORD }}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Code sign (signtool)
-        if: ${{ secrets.WIN_CSC_PFX && secrets.WIN_CSC_PFX_PASSWORD }}
+        if: steps.signing.outputs.enabled == 'true'
         shell: pwsh
         env:
           PFX_BASE64: ${{ secrets.WIN_CSC_PFX }}

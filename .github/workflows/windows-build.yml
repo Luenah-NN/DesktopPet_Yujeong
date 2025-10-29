@@ -86,6 +86,31 @@ jobs:
             --add-data "assets;assets" `
             --add-data "icons;icons"
 
+      # ✅ secrets를 if에서 직접 쓰지 않고, 먼저 체크해서 출력값으로 노출
+      - name: Check signing secrets
+        id: signing
+        shell: bash
+        run: |
+          if [ -n "${{ secrets.WIN_CSC_PFX }}" ] && [ -n "${{ secrets.WIN_CSC_PFX_PASSWORD }}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Code sign (signtool)
+        if: steps.signing.outputs.enabled == 'true'
+        shell: pwsh
+        env:
+          PFX_BASE64: ${{ secrets.WIN_CSC_PFX }}
+          PFX_PASSWORD: ${{ secrets.WIN_CSC_PFX_PASSWORD }}
+        run: |
+          [IO.File]::WriteAllBytes("codesign.pfx",[Convert]::FromBase64String($env:PFX_BASE64))
+          $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+                       Sort-Object FullName -Descending | Select-Object -First 1).FullName
+          if (-not $signtool) { throw "signtool.exe not found" }
+          & $signtool sign /f codesign.pfx /p $env:PFX_PASSWORD /tr http://timestamp.digicert.com /td SHA256 /fd SHA256 dist\YujeongPet.exe `
+            || & $signtool sign /f codesign.pfx /p $env:PFX_PASSWORD /tr http://timestamp.sectigo.com /td SHA256 /fd SHA256 dist\YujeongPet.exe
+
       - name: Zip artifact
         shell: pwsh
         run: |

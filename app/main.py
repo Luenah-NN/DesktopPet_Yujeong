@@ -306,35 +306,50 @@ class Pet(QtWidgets.QMainWindow):
             else:
                 self.set_action("idle")
 
+    # --- set_action(): 논리 사이즈로 고정 + CacheAll ---
     def set_action(self, key):
         path = self.anim_paths.get(key)
         if not path or not os.path.exists(path):
             return
         if self.current_action == key and self.movie:
             return
+
         self.current_action = key
         self.movie = QtGui.QMovie(path)
-        rect = self.movie.frameRect()
-        scaled = QtCore.QSize(int(rect.width()*SCALE), int(rect.height()*SCALE))
+        self.movie.setCacheMode(QtGui.QMovie.CacheAll)  # 모든 프레임 캐시
+
+        # 논리 프레임(전체 캔버스) 기준으로 스케일 계산
+        logical = self.movie.frameRect().size()              # ★ 핵심: currentImage() 쓰지 않기
+        scaled  = QtCore.QSize(int(logical.width()*SCALE), int(logical.height()*SCALE))
         if scaled.width() > 0 and scaled.height() > 0:
             self.movie.setScaledSize(scaled)
+
         self.label.setMovie(self.movie)
         self.movie.frameChanged.connect(self._on_frame_changed)
         self.movie.start()
-        self.resize_to_movie()
 
+        # 라벨/창도 논리 스케일 크기로 딱 맞추기
+        self.label.resize(scaled)
+        self.setFixedSize(scaled)
+
+    # --- resize_to_movie(): 항상 frameRect() 사용 ---
     def resize_to_movie(self):
         if self.movie:
-            rect = self.movie.currentImage().rect() if hasattr(self.movie, "currentImage") else self.movie.frameRect()
-            scaled = QtCore.QSize(int(rect.width()*SCALE), int(rect.height()*SCALE))
+            logical = self.movie.frameRect().size()  # ★ 논리 캔버스
+            scaled  = QtCore.QSize(int(logical.width()*SCALE), int(logical.height()*SCALE))
             if scaled.width() > 0 and scaled.height() > 0:
+                self.label.resize(scaled)
                 self.setFixedSize(scaled)
 
+    # --- _on_frame_changed(): rembg면 마스크 제거, chroma면 흰색 마스크 ---
     def _on_frame_changed(self, _i):
         if BG_MODE == "chroma":
             pix = self.movie.currentPixmap()
             mask = pix.createMaskFromColor(QtGui.QColor(255,255,255), QtCore.Qt.MaskOutColor)
             self.setMask(mask)
+        else:
+            # rembg(알파 포함) → 혹시 이전 마스크가 남아 있으면 클리어
+            self.clearMask()
 
     # ----- 앰비언트/랜덤 이벤트 -----
     def pick_ambient_action(self):
@@ -517,7 +532,12 @@ class Pet(QtWidgets.QMainWindow):
         else:
             self.set_action("idle")
 
+# --- main(): HiDPI 보정은 QApplication 생성 전에 ---
 def main():
+    # HiDPI(Windows 스케일링) 환경에서 잘림/블러 방지
+    QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
+    QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
+
     app = QtWidgets.QApplication(sys.argv)
     mgr = PetManager(app)
     mgr.spawn()

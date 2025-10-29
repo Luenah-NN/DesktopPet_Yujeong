@@ -22,14 +22,9 @@ jobs:
       - name: Prepare icon (png -> ico if needed)
         shell: pwsh
         run: |
-          if (!(Test-Path icons\icon.ico) -and (Test-Path icons\icon.png)) {{
-            python - << 'PY'
-from PIL import Image
-im = Image.open('icons/icon.png').convert('RGBA')
-im.save('icons/icon.ico', sizes=[(16,16),(32,32),(48,48),(256,256)])
-print('icon.ico generated')
-PY
-          }}
+          if (!(Test-Path icons\icon.ico) -and (Test-Path icons\icon.png)) {
+            python -c "from PIL import Image; im=Image.open('icons/icon.png').convert('RGBA'); im.save('icons/icon.ico', sizes=[(16,16),(32,32),(48,48),(256,256)]); print('icon.ico generated')"
+          }
 
       - name: Build (PyInstaller onefile)
         shell: pwsh
@@ -56,7 +51,7 @@ PY
           # Find signtool.exe
           $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
                        Sort-Object FullName -Descending | Select-Object -First 1).FullName
-          if (-not $signtool) {{ throw "signtool.exe not found" }}
+          if (-not $signtool) { throw "signtool.exe not found" }
 
           # Timestamp (DigiCert → Sectigo fallback)
           & $signtool sign /f codesign.pfx /p $env:PFX_PASSWORD /tr http://timestamp.digicert.com /td SHA256 /fd SHA256 dist\YujeongPet.exe `
@@ -72,3 +67,4 @@ PY
         with:
           name: YujeongPet-Windows
           path: dist/YujeongPet.zip
+

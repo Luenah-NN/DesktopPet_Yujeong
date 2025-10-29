@@ -5,9 +5,12 @@ from pathlib import Path
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 CHAR_NAME = "Yujeong"
-BG_MODE   = "rembg"  # "chroma" or "rembg"
-SCALE     = 0.75      # (5) 캐릭터 크기 75%
+BG_MODE   = "rembg"   # "chroma" or "rembg"
+SCALE     = 0.75
 BASE_DIR  = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+
+# rembg 프레임 누락 대비: 순백(#FFFFFF)만 보수적으로 자르는 폴백 마스킹
+CHROMA_FALLBACK_ON_REMBG = True
 
 ACTIONS = {
     "idle": "idle/idle.gif",
@@ -31,7 +34,20 @@ ACTIONS = {
     "sleep": "sleep/sleep.gif",
 }
 
-# ========== Pet Manager (멀티 스폰) ==========
+# ---------- 유틸: 현재 창이 위치한 모니터의 availableGeometry ----------
+def current_available_geometry(window: QtWidgets.QWidget) -> QtCore.QRect:
+    win = window.windowHandle()
+    if win and win.screen():
+        return win.screen().availableGeometry()
+    # 폴백: 커서 위치 스크린
+    p = QtGui.QCursor.pos()
+    scr = QtGui.QGuiApplication.screenAt(p)
+    if scr:
+        return scr.availableGeometry()
+    # 최후 폴백: 기본
+    return QtWidgets.QApplication.primaryScreen().availableGeometry()
+
+# ---------- Pet Manager (멀티 스폰) ----------
 class PetManager(QtCore.QObject):
     def __init__(self, app):
         super().__init__()
@@ -55,7 +71,7 @@ class PetManager(QtCore.QObject):
         if not self.pets:
             QtCore.QTimer.singleShot(0, self.app.quit)
 
-# ========== Pet Window ==========
+# ---------- Pet Window ----------
 class Pet(QtWidgets.QMainWindow):
     HOLD_SHORT = 1200
     HOLD_MED   = 2000
@@ -67,11 +83,12 @@ class Pet(QtWidgets.QMainWindow):
 
         self.setWindowTitle(CHAR_NAME)
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
+        self.setAttribute(QtCore.Qt.WA_NoSystemBackground, True)
         self.setWindowFlag(QtCore.Qt.FramelessWindowHint, True)
         self.setWindowFlag(QtCore.Qt.Tool, True)
         self.setWindowFlag(QtCore.Qt.WindowStaysOnTopHint, True)
 
-        # 아이콘 (exe에 포함된 icons/icon.ico)
+        # 아이콘
         icon_path = (BASE_DIR / "icons" / "icon.ico").as_posix()
         if os.path.exists(icon_path):
             self.setWindowIcon(QtGui.QIcon(icon_path))
@@ -87,50 +104,52 @@ class Pet(QtWidgets.QMainWindow):
         # 이동/물리
         self.vx = 0.0
         self.vy = 0.0
-        self.ay = 1.1  # 중력
+        self.ay = 1.1
         self.dragging = False
         self.drag_offset = QtCore.QPoint(0, 0)
-        self.ground_margin = 2  # (7) 바닥에 닿아보이도록 아주 약간 더 내려앉힘
+        self.ground_margin = 2
 
         # 상태
-        self.follow_mouse = False   # (1) 기본 OFF
-        self.random_walk  = True    # (2) 기본 ON
+        self.follow_mouse = False   # 기본 OFF
+        self.random_walk  = True    # 기본 ON
         self.stop_move    = False
         self.always_active = True
         self.sleeping = False
 
-        # 스테이트/모드
+        # 모드
         self.mode = "normal"   # "normal" | "dance" | "exercise" | "sleep"
         self.exercise_cycle = ["squat","boxing","plank","jumping_jacks"]
         self.exercise_idx = 0
         self.exercise_timer = QtCore.QTimer(self)
         self.exercise_timer.timeout.connect(self._exercise_next)
 
-        # 일시적 오버라이드 (ex: 간식/춤/펫/서프라이즈/앵그리 등)
-        self.force_action_until = 0.0  # (3) (11) 플레이 잠금 시간
+        # 임시 오버라이드 타임아웃
+        self.force_action_until = 0.0
         self.now = time.monotonic
 
-        # 클릭/더블클릭 상태
+        # 클릭/더블클릭
         self.click_times = deque(maxlen=8)
-        self.click_window = 0.9  # 초
+        self.click_window = 0.9
 
-        # 던지기(관성) 계산용 드래그 위치 기록
-        self.drag_trace = deque(maxlen=6)  # (pos, t)
+        # 던지기(관성)
+        self.drag_trace = deque(maxlen=6)
 
-        # 앰비언트(랜덤 이벤트) 타이머
+        # 앰비언트
         self.ambient_timer = QtCore.QTimer(self)
         self.ambient_timer.timeout.connect(self.pick_ambient_action)
         self.ambient_timer.start(4000)
 
-        # 랜덤 이동 중 "가끔 Idle 60초" (#10)
+        # 랜덤 이동 중 "가끔 Idle 60초"
         self.random_idle_until = 0.0
 
-        # 마우스 따라가기 on 전환 감지 (#13)
-        self.just_enabled_follow = False
-        self.force_run_until = self.now() + 0.0  # follow on 직후 강제 러닝 시간
+        # follow on 직후 러닝 유지
+        self.force_run_until = self.now() + 0.0
 
-        # 커서 닿을 때 점프 쿨다운 (#8)
+        # 커서 접촉/근접 점프 쿨다운
         self.cursor_jump_cooldown_until = 0.0
+
+        # 근접 스냅 임계
+        self.near_dist = 28  # 너무 가까우면 떨림 → 스냅/점프
 
         # 메인 루프
         self.tick = QtCore.QTimer(self)
@@ -140,10 +159,9 @@ class Pet(QtWidgets.QMainWindow):
         self.make_menu()
         self.set_action("idle")
         self.resize_to_movie()
-        # 초기 위치
         self.move(100, 100)
 
-    # ----- 메뉴 -----
+    # ---------- 메뉴 ----------
     def make_menu(self):
         self.menu = QtWidgets.QMenu(self)
         self.act_follow = self.menu.addAction("마우스 따라가기")
@@ -151,9 +169,9 @@ class Pet(QtWidgets.QMainWindow):
         self.act_stop   = self.menu.addAction("이동 정지")
         self.menu.addSeparator()
         self.act_dance  = self.menu.addAction("춤추기 (토글)")
-        self.act_eat    = self.menu.addAction("간식주기")
-        self.act_pet    = self.menu.addAction("쓰다듬기")
-        self.act_ex     = self.menu.addAction("운동하기(토글)")
+        self.act_eat    = self.menu.addAction("간식주기 (20초)")
+        self.act_pet    = self.menu.addAction("쓰다듬기 (20초)")
+        self.act_ex     = self.menu.addAction("운동하기 (토글)")
         self.act_sleep  = self.menu.addAction("잠자기 (토글)")
         self.menu.addSeparator()
         self.act_spawn  = self.menu.addAction("펫 추가")
@@ -161,13 +179,20 @@ class Pet(QtWidgets.QMainWindow):
         self.menu.addSeparator()
         self.act_always = self.menu.addAction("항상 활성화")
 
-        for a in [self.act_follow, self.act_random, self.act_stop, self.act_always]:
+        for a in [self.act_follow, self.act_random, self.act_stop, self.act_always,
+                  self.act_dance, self.act_ex, self.act_sleep]:
             a.setCheckable(True)
 
-        # 기본값 (1)(2)
+        # 기본 체크 상태
         self.act_follow.setChecked(self.follow_mouse)
         self.act_random.setChecked(self.random_walk)
         self.act_always.setChecked(self.always_active)
+        self._update_mode_checks()
+
+    def _update_mode_checks(self):
+        self.act_dance.setChecked(self.mode == "dance")
+        self.act_ex.setChecked(self.mode == "exercise")
+        self.act_sleep.setChecked(self.mode == "sleep")
 
     def contextMenuEvent(self, ev):
         action = self.menu.exec_(self.mapToGlobal(ev.pos()))
@@ -179,57 +204,50 @@ class Pet(QtWidgets.QMainWindow):
         self.stop_move    = self.act_stop.isChecked()
         self.always_active= self.act_always.isChecked()
 
-        # (13) follow on 직후 강제 러닝 보정
+        # follow on 직후 러닝
         if (not prev_follow) and self.follow_mouse:
             self.force_run_until = self.now() + 0.8
 
-        # 모드성 액션들
+        # 모드성 액션
         if action == self.act_dance:
-            # (11) 변경 전까지 유지 (토글)
             if self.mode == "dance":
-                self.mode = "normal"
-                self.set_action("idle")
+                self.mode = "normal"; self.set_action("idle")
             else:
-                self.mode = "dance"
-                self.set_action("dance")
+                self.mode = "dance";  self.set_action("dance")
         elif action == self.act_eat:
-            self.play_temp("eat", 1600)  # 짧은 임시
+            self.play_temp("eat", 20_000)  # 20초
         elif action == self.act_pet:
-            self.play_temp("pet", 1600)  # 짧은 임시
+            self.play_temp("pet", 20_000)  # 20초
         elif action == self.act_ex:
-            # (12) 운동 토글: 시작 시 랜덤 하나 → 이후 60초씩 순환, 변경 없을 때까지 유지
             if self.mode == "exercise":
-                self.mode = "normal"
-                self.exercise_timer.stop()
-                self.set_action("idle")
+                self.mode = "normal"; self.exercise_timer.stop(); self.set_action("idle")
             else:
                 self.mode = "exercise"
                 first = random.choice(self.exercise_cycle)
                 self.set_action(first)
                 self.exercise_idx = self.exercise_cycle.index(first)
-                self.exercise_timer.start(60_000)  # 60초마다 교체
+                self.exercise_timer.start(60_000)  # 60초 간격 교대
         elif action == self.act_sleep:
             if self.mode == "sleep":
-                self.mode = "normal"
-                self.set_action("idle")
+                self.mode = "normal"; self.set_action("idle")
             else:
-                self.mode = "sleep"
-                self.set_action("sleep")
+                self.mode = "sleep";  self.set_action("sleep")
         elif action == self.act_spawn:
             g = self.geometry()
             self.mgr.spawn(pos=QtCore.QPoint(g.x()+40, g.y()+20))
         elif action == self.act_close:
             self.mgr.remove(self)
 
-    # ----- 운동 순환 (12) -----
+        self._update_mode_checks()
+
+    # 운동 순환
     def _exercise_next(self):
         if self.mode != "exercise":
-            self.exercise_timer.stop()
-            return
+            self.exercise_timer.stop(); return
         self.exercise_idx = (self.exercise_idx + 1) % len(self.exercise_cycle)
         self.set_action(self.exercise_cycle[self.exercise_idx])
 
-    # ----- 입력 -----
+    # ---------- 입력 ----------
     def mousePressEvent(self, ev):
         if ev.button() == QtCore.Qt.LeftButton:
             now = self.now()
@@ -240,37 +258,39 @@ class Pet(QtWidgets.QMainWindow):
             self.drag_offset = ev.globalPos() - self.frameGeometry().topLeft()
             self.drag_trace.clear()
             self._record_drag_point(ev.globalPos())
-            self.set_action("hang")
+            self.set_action("hang")   # 드래그 중 hang
 
     def mouseMoveEvent(self, ev):
         if self.dragging:
             self._record_drag_point(ev.globalPos())
-            self.move((ev.globalPos() - self.drag_offset))
+            self.move(ev.globalPos() - self.drag_offset)
+            # 드래그 중에도 화면 밖으로 못 나가게 클램프
+            self._clamp_to_screen()
 
     def mouseReleaseEvent(self, ev):
         if ev.button() == QtCore.Qt.LeftButton and self.dragging:
             self.dragging = False
             self._apply_throw_velocity()
 
-            # 벽 근처면 클라임, 아니면 낙하
+            # 벽 근처면 climb, 아니면 즉시 낙하 시작 (hang 유지 X)
             x, y, w, h = self.geometry().x(), self.geometry().y(), self.width(), self.height()
-            scr = QtWidgets.QApplication.primaryScreen().availableGeometry()
+            scr = current_available_geometry(self)
             margin = 10
             if x <= margin:
                 self.set_action("climb_left")
             elif x + w >= scr.width() - margin:
                 self.set_action("climb_right")
             else:
-                # 낙하 시작
-                if self.vy > -8:
-                    self.vy = 0.0
+                # (1) 드래그 해제 → hang 종료, 점프로 전환 후 낙하
+                self.set_action("jump")
+                # 아래로 내려가도록 최소 하강속도 보장
+                self.vy = max(self.vy, 2.0)
 
     def mouseDoubleClickEvent(self, ev):
         if ev.button() == QtCore.Qt.LeftButton:
-            # (11) sleep일 때도 깨움 + (기본) 서프라이즈
             self.play_temp("surprise", self.HOLD_SHORT, on_done=self.wake_if_sleeping)
 
-    # ----- 드래그 속도 기록/적용 (#9) -----
+    # ---------- 드래그 속도 기록/적용 ----------
     def _record_drag_point(self, gpos: QtCore.QPoint):
         self.drag_trace.append((QtCore.QPoint(gpos), self.now()))
 
@@ -286,7 +306,7 @@ class Pet(QtWidgets.QMainWindow):
         self.vx = dx / max(1.0, frames)
         self.vy = dy / max(1.0, frames)
 
-    # ----- 임시 오버라이드 -----
+    # ---------- 임시 오버라이드 ----------
     def play_temp(self, key, hold_ms, on_done=None):
         self.set_action(key)
         self.force_action_until = self.now() + (hold_ms / 1000.0)
@@ -305,8 +325,9 @@ class Pet(QtWidgets.QMainWindow):
                 self.set_action(random.choice(["walk_left","walk_right"]))
             else:
                 self.set_action("idle")
+        self._update_mode_checks()
 
-    # --- set_action(): 논리 사이즈로 고정 + CacheAll ---
+    # ---------- 액션/사이즈 ----------
     def set_action(self, key):
         path = self.anim_paths.get(key)
         if not path or not os.path.exists(path):
@@ -316,54 +337,75 @@ class Pet(QtWidgets.QMainWindow):
 
         self.current_action = key
         self.movie = QtGui.QMovie(path)
-        self.movie.setCacheMode(QtGui.QMovie.CacheAll)  # 모든 프레임 캐시
+        self.movie.setCacheMode(QtGui.QMovie.CacheAll)
 
-        # 논리 프레임(전체 캔버스) 기준으로 스케일 계산
-        logical = self.movie.frameRect().size()              # ★ 핵심: currentImage() 쓰지 않기
+        logical = self.movie.frameRect().size()
         scaled  = QtCore.QSize(int(logical.width()*SCALE), int(logical.height()*SCALE))
         if scaled.width() > 0 and scaled.height() > 0:
             self.movie.setScaledSize(scaled)
 
         self.label.setMovie(self.movie)
+        try:
+            self.movie.frameChanged.disconnect()
+        except Exception:
+            pass
         self.movie.frameChanged.connect(self._on_frame_changed)
         self.movie.start()
 
-        # 라벨/창도 논리 스케일 크기로 딱 맞추기
         self.label.resize(scaled)
         self.setFixedSize(scaled)
+        # 액션 바뀔 때도 스크린 안으로 클램프
+        self._clamp_to_screen()
 
-    # --- resize_to_movie(): 항상 frameRect() 사용 ---
     def resize_to_movie(self):
         if self.movie:
-            logical = self.movie.frameRect().size()  # ★ 논리 캔버스
+            logical = self.movie.frameRect().size()
             scaled  = QtCore.QSize(int(logical.width()*SCALE), int(logical.height()*SCALE))
             if scaled.width() > 0 and scaled.height() > 0:
                 self.label.resize(scaled)
                 self.setFixedSize(scaled)
+                self._clamp_to_screen()
 
-    # --- _on_frame_changed(): rembg면 마스크 제거, chroma면 흰색 마스크 ---
+    # rembg 폴백: 순백 배경만 잘라내기(흰 옷 보호)
+    def _corners_are_pure_white(self, pix: QtGui.QPixmap) -> bool:
+        img = pix.toImage().convertToFormat(QtGui.QImage.Format_RGBA8888)
+        w, h = img.width(), img.height()
+        if w < 2 or h < 2:
+            return False
+        pts = [(0,0), (w-1,0), (0,h-1), (w-1,h-1)]
+        for (x,y) in pts:
+            c = img.pixelColor(x,y)
+            if not (c.red()==255 and c.green()==255 and c.blue()==255):
+                return False
+        return True
+
     def _on_frame_changed(self, _i):
         if BG_MODE == "chroma":
             pix = self.movie.currentPixmap()
             mask = pix.createMaskFromColor(QtGui.QColor(255,255,255), QtCore.Qt.MaskOutColor)
             self.setMask(mask)
         else:
-            # rembg(알파 포함) → 혹시 이전 마스크가 남아 있으면 클리어
+            # rembg: 기본은 알파 사용 → 마스크 해제
             self.clearMask()
+            # (3) 일부 프레임이 순백으로 남는 경우에만 보수적 폴백
+            if CHROMA_FALLBACK_ON_REMBG:
+                pix = self.movie.currentPixmap()
+                if self._corners_are_pure_white(pix):
+                    mask = pix.createMaskFromColor(QtGui.QColor(255,255,255), QtCore.Qt.MaskOutColor)
+                    self.setMask(mask)
 
-    # ----- 앰비언트/랜덤 이벤트 -----
+    # ---------- 앰비언트 ----------
     def pick_ambient_action(self):
         if (not self.follow_mouse) and (not self.random_walk):
             return
         if self.mode in ("dance","exercise","sleep"):
             return
-        if self.dragging:
-            return
-        if self.stop_move:
+        if self.dragging or self.stop_move:
             return
         if self.now() < self.force_action_until:
             return
 
+        # 랜덤 이동 중 가끔 Idle 60초
         if self.random_walk:
             if self.now() >= self.random_idle_until and random.random() < 0.12:
                 self.random_idle_until = self.now() + 60.0
@@ -373,38 +415,39 @@ class Pet(QtWidgets.QMainWindow):
     def wake_if_sleeping(self):
         if self.mode == "sleep":
             self.mode = "normal"
+            self._update_mode_checks()
 
     def check_rapid_clicks(self):
         now = self.now()
-        while self.click_times and now - self.click_times[0] > 0.9:
+        while self.click_times and now - self.click_times[0] > self.click_window:
             self.click_times.popleft()
         if len(self.click_times) >= 5:
             self.click_times.clear()
             self.play_temp("angry", self.HOLD_MED)
 
-    # ----- 메인 루프 -----
+    # ---------- 메인 루프 ----------
     def update_loop(self):
         now = self.now()
 
         if self.mode in ("dance","exercise","sleep"):
             return
-        if self.dragging:
+        if self.dragging or self.stop_move:
             return
 
         geo = self.geometry()
-        scr = QtWidgets.QApplication.primaryScreen().availableGeometry()
+        scr = current_available_geometry(self)
         bottom = scr.height() - self.height() + self.ground_margin
-        left_edge = 0
-        right_edge = scr.width() - self.width()
+        left_edge = scr.x()
+        right_edge = scr.x() + scr.width() - self.width()
 
-        # 커서 닿을 때 점프 (8)
+        # 커서 닿거나 근접하면 점프 (쿨다운)
         if self.follow_mouse and now >= self.cursor_jump_cooldown_until:
             cursor = QtGui.QCursor.pos()
             if geo.contains(cursor):
                 self.cursor_jump_cooldown_until = now + 1.0
                 self.jump_action()
 
-        # 중력 낙하 + 바닥 탄성 (#6, #7, #9)
+        # 중력 낙하 + 바닥 탄성
         in_climb = self.current_action in ("climb_left","climb_right")
         if geo.y() < bottom and not in_climb:
             self.vy += self.ay
@@ -422,7 +465,7 @@ class Pet(QtWidgets.QMainWindow):
                         self.set_action("idle")
             return
 
-        # 클라임 중 follow 연동 (#14)
+        # climb 중 follow 연동
         if in_climb:
             if self.follow_mouse:
                 mp = QtGui.QCursor.pos()
@@ -430,41 +473,57 @@ class Pet(QtWidgets.QMainWindow):
                 dy = 0
                 if abs(geo.y() - target_y) > 2:
                     dy = -2 if geo.y() > target_y else 2
-                ny = max(0, min(bottom, geo.y() + dy))
+                ny = max(scr.y(), min(bottom, geo.y() + dy))
                 self.move(geo.x(), ny)
                 margin = 14
-                if (self.current_action == "climb_left" and geo.x() > margin) or \
+                if (self.current_action == "climb_left" and geo.x() > left_edge + margin) or \
                    (self.current_action == "climb_right" and geo.x() < right_edge - margin):
                     self.set_action("hang")
                     self.vy = 0.0
                 return
             else:
                 dy = -1 if (QtCore.QTime.currentTime().msec()//500)%2==0 else 1
-                ny = max(0, min(bottom, geo.y()+dy))
+                ny = max(scr.y(), min(bottom, geo.y()+dy))
                 self.move(geo.x(), ny)
                 return
 
         if now < self.force_action_until:
             return
-        if self.stop_move:
-            return
 
-        # Follow
+        # Follow 이동
         if self.follow_mouse:
             mp = QtGui.QCursor.pos()
             cx = geo.x() + self.width()//2
             dx = mp.x() - cx
             dist = abs(dx)
 
+            # 근접 시 스냅/점프 → 떨림 방지
+            if dist <= self.near_dist:
+                # 수평 스냅(정지)
+                self.move(geo.x(), geo.y())
+                # 쿨다운 안 걸렸으면 점프
+                if now >= self.cursor_jump_cooldown_until:
+                    self.cursor_jump_cooldown_until = now + 1.0
+                    self.jump_action()
+                else:
+                    self.set_action("idle")
+                return
+
+            # 벽 근처면 클라임으로 전환
             margin = 10
-            if geo.x() <= margin:
+            if geo.x() <= left_edge + margin:
                 self.set_action("climb_left"); return
-            if geo.x() + self.width() >= scr.width() - margin:
+            if geo.x() + self.width() >= right_edge - margin + self.width():
                 self.set_action("climb_right"); return
 
             speed = 6 if (now < self.force_run_until or dist > 400) else 3
-            nx = geo.x() + (speed if dx>0 else -speed)
+            step = speed if dx>0 else -speed
+            nx = geo.x() + step
             nx = max(left_edge, min(right_edge, nx))
+            # 작은 오버슈트 방지: 목표에 가까우면 스냅
+            if abs((nx + self.width()//2) - mp.x()) < speed:
+                nx = mp.x() - self.width()//2
+                nx = max(left_edge, min(right_edge, nx))
             self.move(nx, geo.y())
 
             if (now < self.force_run_until) or dist > 200:
@@ -497,18 +556,27 @@ class Pet(QtWidgets.QMainWindow):
 
         self.set_action("idle")
 
+    def _clamp_to_screen(self):
+        # 창을 현재 모니터의 availableGeometry 안으로 강제
+        g = self.geometry()
+        scr = current_available_geometry(self)
+        x = max(scr.x(), min(g.x(), scr.x() + scr.width() - self.width()))
+        y = max(scr.y(), min(g.y(), scr.y() + scr.height() - self.height()))
+        if x != g.x() or y != g.y():
+            self.move(x, y)
+
     def check_bounce(self):
-        geo = self.geometry()
-        scr = QtWidgets.QApplication.primaryScreen().availableGeometry()
-        hit_left  = geo.x() <= 0
-        hit_right = geo.x() + self.width() >= (scr.width())
+        g = self.geometry()
+        scr = current_available_geometry(self)
+        hit_left  = g.x() <= scr.x()
+        hit_right = g.x() + self.width() >= (scr.x() + scr.width())
         if hit_left or hit_right:
             self.vx = -self.vx if self.vx != 0 else self.vx
             self.vy = -10
             self.set_action("jump")
-            nx = 1 if hit_left else scr.width()-self.width()-1
-            self.move(nx, geo.y())
-            QtCore.QTimer.singleShot(600, lambda: self._end_bounce())
+            nx = scr.x()+1 if hit_left else scr.x() + scr.width() - self.width() - 1
+            self.move(nx, g.y())
+            QtCore.QTimer.singleShot(600, self._end_bounce)
 
     def _end_bounce(self):
         if self.random_walk:
@@ -522,7 +590,7 @@ class Pet(QtWidgets.QMainWindow):
         self.set_action("jump")
         if self.vy > -10:
             self.vy = -12
-        QtCore.QTimer.singleShot(800, lambda: self._end_jump())
+        QtCore.QTimer.singleShot(800, self._end_jump)
 
     def _end_jump(self):
         if self.random_walk:
@@ -532,12 +600,10 @@ class Pet(QtWidgets.QMainWindow):
         else:
             self.set_action("idle")
 
-# --- main(): HiDPI 보정은 QApplication 생성 전에 ---
+# HiDPI 보정
 def main():
-    # HiDPI(Windows 스케일링) 환경에서 잘림/블러 방지
     QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
     QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
-
     app = QtWidgets.QApplication(sys.argv)
     mgr = PetManager(app)
     mgr.spawn()

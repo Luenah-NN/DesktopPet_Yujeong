@@ -6,7 +6,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 
 CHAR_NAME = "Yujeong"
 BG_MODE   = "rembg"   # "chroma" or "rembg"
-SCALE     = 0.75
+SCALE     = 0.60      # ← 요구사항: 0.6배
 BASE_DIR  = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 
 # rembg 프레임 누락 대비: 순백(#FFFFFF)만 보수적으로 자르는 폴백 마스킹
@@ -34,7 +34,11 @@ ACTIONS = {
     "sleep": "sleep/sleep.gif",
 }
 
-# ---------- 유틸: 현재 창이 위치한 모니터의 availableGeometry ----------
+# 바닥(작업표시줄 위)에 스냅시킬 액션들
+FLOOR_SNAP_ACTIONS = {
+    "idle","dance","eat","pet","sleep","squat","boxing","plank","jumping_jacks"
+}
+
 def current_available_geometry(window: QtWidgets.QWidget) -> QtCore.QRect:
     win = window.windowHandle()
     if win and win.screen():
@@ -45,7 +49,6 @@ def current_available_geometry(window: QtWidgets.QWidget) -> QtCore.QRect:
         return scr.availableGeometry()
     return QtWidgets.QApplication.primaryScreen().availableGeometry()
 
-# ---------- Pet Manager (멀티 스폰) ----------
 class PetManager(QtCore.QObject):
     def __init__(self, app):
         super().__init__()
@@ -69,7 +72,6 @@ class PetManager(QtCore.QObject):
         if not self.pets:
             QtCore.QTimer.singleShot(0, self.app.quit)
 
-# ---------- Pet Window ----------
 class Pet(QtWidgets.QMainWindow):
     HOLD_SHORT = 1200
     HOLD_MED   = 2000
@@ -86,7 +88,6 @@ class Pet(QtWidgets.QMainWindow):
         self.setWindowFlag(QtCore.Qt.Tool, True)
         self.setWindowFlag(QtCore.Qt.WindowStaysOnTopHint, True)
 
-        # 아이콘
         icon_path = (BASE_DIR / "icons" / "icon.ico").as_posix()
         if os.path.exists(icon_path):
             self.setWindowIcon(QtGui.QIcon(icon_path))
@@ -107,7 +108,7 @@ class Pet(QtWidgets.QMainWindow):
         self.drag_offset = QtCore.QPoint(0, 0)
         self.ground_margin = 2
 
-        # 상태/플래그
+        # 상태
         self.follow_mouse = False
         self.random_walk  = True
         self.stop_move    = False
@@ -122,21 +123,20 @@ class Pet(QtWidgets.QMainWindow):
         self.exercise_timer = QtCore.QTimer(self)
         self.exercise_timer.timeout.connect(self._exercise_next)
 
-        # 임시 오버라이드 타임아웃 & 충돌방지 토큰
+        # 임시 오버라이드
         self.force_action_until = 0.0
         self.temp_token = 0
-        self._temp_stop_saved = {}  # token -> saved stop_move
+        self._temp_stop_saved = {}
 
-        # 모드별 stop_move 저장
         self._saved_stop_for_dance = None
         self._saved_stop_for_ex = None
         self._saved_stop_for_sleep = None
 
-        # 클릭/더블클릭
+        # 클릭
         self.click_times = deque(maxlen=8)
         self.click_window = 0.9
 
-        # 던지기(관성)
+        # 던지기
         self.drag_trace = deque(maxlen=6)
 
         # 앰비언트
@@ -149,9 +149,9 @@ class Pet(QtWidgets.QMainWindow):
         self.force_run_until = 0.0
         self.near_dist = 28
         self.follow_resume_deadline = 0.0
-        self.follow_resume_dir = 0  # -1 left, +1 right
+        self.follow_resume_dir = 0
 
-        # Climb 유지 타이머
+        # Climb 유지
         self.climb_hold_until = 0.0
         self.climb_hold_timer = None
 
@@ -204,7 +204,7 @@ class Pet(QtWidgets.QMainWindow):
         self.act_sleep.setChecked(self.mode == "sleep")
 
     def contextMenuEvent(self, ev):
-        # 메뉴 열리는 동안 이동/팔로우/랜덤 이동을 일시 정지 (닫힘 방지)
+        # 메뉴 동안 동작 정지(닫힘 방지)
         self.menu_open = True
         saved_follow = self.follow_mouse
         saved_random = self.random_walk
@@ -218,22 +218,19 @@ class Pet(QtWidgets.QMainWindow):
         # 토글 반영
         self.follow_mouse = self.act_follow.isChecked()
         self.random_walk  = self.act_random.isChecked()
-        self.stop_move    = self.act_stop.isChecked() or self.stop_move  # 스페셜에서 True로 만들 수 있음
+        self.stop_move    = self.act_stop.isChecked() or self.stop_move
         self.always_active= self.act_always.isChecked()
 
         if (not saved_follow) and self.follow_mouse:
             self.force_run_until = time.monotonic() + 0.8
 
-        # 모드성 액션 (스페셜 실행 시 자동 이동정지)
+        # 스페셜 실행 시 자동 이동 정지
         if action == self.act_dance:
             if self.mode == "dance":
                 self.mode = "normal"
-                # 실행 해제 → 이전 stop 복구
                 if self._saved_stop_for_dance is not None:
-                    self.stop_move = self._saved_stop_for_dance
-                    self._saved_stop_for_dance = None
-                self.set_action("idle" if (not self.follow_mouse and not self.random_walk) else
-                                ("run_right" if self.follow_mouse else "walk_right"))
+                    self.stop_move = self._saved_stop_for_dance; self._saved_stop_for_dance = None
+                self._post_special_restore()
             else:
                 self._saved_stop_for_dance = self.stop_move
                 self.stop_move = True
@@ -247,11 +244,9 @@ class Pet(QtWidgets.QMainWindow):
             if self.mode == "exercise":
                 self.mode = "normal"
                 if self._saved_stop_for_ex is not None:
-                    self.stop_move = self._saved_stop_for_ex
-                    self._saved_stop_for_ex = None
+                    self.stop_move = self._saved_stop_for_ex; self._saved_stop_for_ex = None
                 self.exercise_timer.stop()
-                self.set_action("idle" if (not self.follow_mouse and not self.random_walk) else
-                                ("run_right" if self.follow_mouse else "walk_right"))
+                self._post_special_restore()
             else:
                 self._saved_stop_for_ex = self.stop_move
                 self.stop_move = True
@@ -259,15 +254,13 @@ class Pet(QtWidgets.QMainWindow):
                 first = random.choice(self.exercise_cycle)
                 self.set_action(first)
                 self.exercise_idx = self.exercise_cycle.index(first)
-                self.exercise_timer.start(10_000)  # 10초 간격
+                self.exercise_timer.start(10_000)  # 10초 간격 유지
         elif action == self.act_sleep:
             if self.mode == "sleep":
                 self.mode = "normal"
                 if self._saved_stop_for_sleep is not None:
-                    self.stop_move = self._saved_stop_for_sleep
-                    self._saved_stop_for_sleep = None
-                self.set_action("idle" if (not self.follow_mouse and not self.random_walk) else
-                                ("run_right" if self.follow_mouse else "walk_right"))
+                    self.stop_move = self._saved_stop_for_sleep; self._saved_stop_for_sleep = None
+                self._post_special_restore()
             else:
                 self._saved_stop_for_sleep = self.stop_move
                 self.stop_move = True
@@ -280,14 +273,21 @@ class Pet(QtWidgets.QMainWindow):
             self.mgr.remove(self)
 
         self._update_mode_checks()
-
-        # 메뉴 닫힘 후, 특별히 stop_move를 True로 만든 것이 아니면 원래대로 복구
-        if self.mode == "normal":  # 스페셜 토글 중이 아니면
+        if self.mode == "normal":
             if not self.stop_move:
                 self.stop_move = saved_stop
         self.menu_open = False
 
-    # 운동 순환
+    def _post_special_restore(self):
+        # 팔로우/랜덤 이동이면 Idle 금지
+        if self.follow_mouse:
+            self.set_action("run_right")
+        elif self.random_walk:
+            if self.vx == 0: self.vx = random.choice([-2.0, 2.0])
+            self.set_action("walk_right" if self.vx>0 else "walk_left")
+        else:
+            self.set_action("idle")
+
     def _exercise_next(self):
         if self.mode != "exercise":
             self.exercise_timer.stop(); return
@@ -325,11 +325,9 @@ class Pet(QtWidgets.QMainWindow):
         if ev.button() == QtCore.Qt.LeftButton and self.dragging:
             self.dragging = False
             self._apply_throw_velocity()
-            # hang 잔류 방지
+            # hang 잔류 방지 토큰 종료 및 즉시 낙하 시작
             self.force_action_until = 0.0
-            if self.current_action == "hang":
-                self.current_action = None
-            # 벽 근처면 climb, 아니면 즉시 낙하 시작
+            # 벽 근처면 climb, 아니면 '낙하' 연출: hang 유지 + 중력만 적용 (Jump 금지)
             g = self.geometry()
             scr = current_available_geometry(self)
             margin = 10
@@ -338,14 +336,15 @@ class Pet(QtWidgets.QMainWindow):
             elif g.x() + self.width() >= scr.x() + scr.width() - margin:
                 self._enter_climb("right")
             else:
-                self.set_action("jump")
-                self.vy = max(self.vy, 2.0)
+                # 바로 떨어지도록 약간의 하강 속도 부여
+                self.set_action("hang")
+                self.vy = max(self.vy, 2.5)
 
     def mouseDoubleClickEvent(self, ev):
         if ev.button() == QtCore.Qt.LeftButton:
             self.play_temp("surprise", self.HOLD_SHORT, on_done=self.wake_if_sleeping)
 
-    # ---------- 드래그 속도 기록/적용 ----------
+    # ---------- 던지기 ----------
     def _record_drag_point(self, gpos: QtCore.QPoint):
         self.drag_trace.append((QtCore.QPoint(gpos), time.monotonic()))
 
@@ -361,7 +360,7 @@ class Pet(QtWidgets.QMainWindow):
         self.vx = dx / max(1.0, frames)
         self.vy = dy / max(1.0, frames)
 
-    # ---------- 임시 오버라이드 (토큰 + temp 동안 이동정지 옵션) ----------
+    # ---------- 임시 오버라이드 ----------
     def play_temp(self, key, hold_ms, on_done=None, stop_during_temp=False):
         self.temp_token += 1
         token = self.temp_token
@@ -377,11 +376,9 @@ class Pet(QtWidgets.QMainWindow):
         QtCore.QTimer.singleShot(hold_ms, _end)
 
     def _end_temp(self, token):
-        # 더 최근 temp가 있으면 무시
         if token != self.temp_token:
             return
         self.force_action_until = 0.0
-        # temp 동안 stop을 켰다면 복구
         if token in self._temp_stop_saved:
             self.stop_move = self._temp_stop_saved.pop(token)
 
@@ -392,10 +389,7 @@ class Pet(QtWidgets.QMainWindow):
         if self.mode == "sleep":
             self.set_action("sleep"); return
 
-        # 팔로우/랜덤 이동 중에는 Idle 금지
-        if self.follow_mouse:
-            return
-        if self.random_walk:
+        if self.follow_mouse or self.random_walk:
             return
         self.set_action("idle")
 
@@ -426,6 +420,13 @@ class Pet(QtWidgets.QMainWindow):
 
         self.label.resize(scaled)
         self.setFixedSize(scaled)
+
+        # 스페셜/Idle 계열은 바닥 스냅 (작업표시줄 위)
+        if key in FLOOR_SNAP_ACTIONS:
+            scr = current_available_geometry(self)
+            bottom_y = scr.y() + scr.height() - self.height() - self.ground_margin
+            self.move(self.x(), bottom_y)
+
         self._clamp_to_screen()
 
     def resize_to_movie(self):
@@ -437,7 +438,7 @@ class Pet(QtWidgets.QMainWindow):
                 self.setFixedSize(scaled)
                 self._clamp_to_screen()
 
-    # rembg 폴백: 순백 배경만 잘라내기(흰 옷 보호)
+    # rembg 폴백: 순백 배경만 잘라내기
     def _corners_are_pure_white(self, pix: QtGui.QPixmap) -> bool:
         img = pix.toImage().convertToFormat(QtGui.QImage.Format_RGBA8888)
         w, h = img.width(), img.height()
@@ -466,11 +467,9 @@ class Pet(QtWidgets.QMainWindow):
     # ---------- climb 10초 유지 → 낙하 ----------
     def _enter_climb(self, side: str):
         if side == "left":
-            self.set_action("climb_left")
-            self.follow_resume_dir = 1
+            self.set_action("climb_left"); self.follow_resume_dir = 1
         else:
-            self.set_action("climb_right")
-            self.follow_resume_dir = -1
+            self.set_action("climb_right"); self.follow_resume_dir = -1
         self.climb_hold_until = time.monotonic() + 10.0
         if self.climb_hold_timer is not None:
             try: self.climb_hold_timer.stop()
@@ -483,13 +482,11 @@ class Pet(QtWidgets.QMainWindow):
     def _end_climb_hold(self):
         if self.current_action in ("climb_left","climb_right"):
             self.set_action("hang")
-            self.vy = max(self.vy, 2.0)  # 낙하 시작
-            # 벽면 이탈 후 러닝 복구 힌트
+            self.vy = max(self.vy, 2.0)
             self.follow_resume_deadline = time.monotonic() + 1.5
 
     # ---------- 앰비언트 ----------
     def pick_ambient_action(self):
-        # 팔로우/랜덤 이동 중엔 Idle 전환 금지
         if self.follow_mouse or self.random_walk:
             return
         if self.mode in ("dance","exercise","sleep"):
@@ -498,7 +495,6 @@ class Pet(QtWidgets.QMainWindow):
             return
         if self.now() < self.force_action_until:
             return
-        # 필요시 가벼운 랜덤 이벤트를 넣을 수 있지만 Idle로는 바꾸지 않음
         return
 
     def wake_if_sleeping(self):
@@ -518,10 +514,8 @@ class Pet(QtWidgets.QMainWindow):
     def update_loop(self):
         now = time.monotonic()
 
-        # 메뉴 열려있으면 완전 정지 (닫힘 방지)
         if self.menu_open:
             return
-
         if self.mode in ("dance","exercise","sleep"):
             return
         if self.dragging or self.stop_move:
@@ -533,27 +527,24 @@ class Pet(QtWidgets.QMainWindow):
         left_edge = scr.x()
         right_edge = scr.x() + scr.width() - self.width()
 
-        # Follow 동작
+        # Follow
         if self.follow_mouse:
             mp = QtGui.QCursor.pos()
             cx = g.x() + self.width()//2
             dx = mp.x() - cx
             dist = abs(dx)
 
-            # 근접/접촉 시: Jump 유지(Idle 금지)
             if dist <= self.near_dist or g.contains(mp):
                 if self.current_action != "jump":
                     self.set_action("jump")
                 return
 
-            # 벽 근처면 Climb + 10초 유지
             margin = 10
             if g.x() <= left_edge + margin:
                 self._enter_climb("left"); return
             if g.x() + self.width() >= right_edge - margin + self.width():
                 self._enter_climb("right"); return
 
-            # 벽에서 떨어진 직후 러닝 복원 힌트가 살아있다면 한 프레임 러닝 강제
             if self.follow_resume_deadline > now and self.current_action not in ("climb_left","climb_right","jump"):
                 if self.follow_resume_dir > 0:
                     self.set_action("run_right")
@@ -563,13 +554,11 @@ class Pet(QtWidgets.QMainWindow):
             speed = 6 if (now < self.force_run_until or dist > 400) else 3
             step = speed if dx>0 else -speed
             nx = g.x() + step
-            # 목표에 가까우면 스냅(떨림 방지)
             if abs((nx + self.width()//2) - mp.x()) < speed:
                 nx = mp.x() - self.width()//2
             nx = max(left_edge, min(right_edge, nx))
             self.move(nx, g.y())
 
-            # Idle 금지: 거리별로 run/walk만
             if (now < self.force_run_until) or dist > 200:
                 self.set_action("run_right" if dx>0 else "run_left")
             else:
@@ -578,21 +567,20 @@ class Pet(QtWidgets.QMainWindow):
             self.check_bounce()
             return
 
-        # 중력 낙하 + 바닥 탄성(팔로우 아닐 때만 적용)
+        # 중력 낙하 + 탄성
         in_climb = self.current_action in ("climb_left","climb_right")
         if g.y() < bottom and not in_climb:
             self.vy += self.ay
             ny = min(bottom, g.y() + int(self.vy))
             self.move(g.x(), ny)
             if ny >= bottom:
-                # ★ 탄성 증가: 0.40 → 0.60
+                # 탄성 0.60
                 if abs(self.vy) > 3.5:
                     self.vy = -abs(self.vy) * 0.60
                     self.vx *= 0.9
                 else:
                     self.vy = 0.0
                     if self.random_walk and not self.follow_mouse:
-                        # Idle 금지: 바로 워크 유지
                         if self.vx == 0:
                             self.vx = random.choice([-2.0, 2.0])
                         self.set_action("walk_right" if self.vx>0 else "walk_left")
@@ -600,12 +588,11 @@ class Pet(QtWidgets.QMainWindow):
                         self.set_action("idle")
             return
 
-        # climb 중(팔로우 없음): 가벼운 상하
+        # climb 중(팔로우 없음): 상하
         if in_climb:
             dy = -1 if (QtCore.QTime.currentTime().msec()//500)%2==0 else 1
             ny = max(scr.y(), min(bottom, g.y()+dy))
             self.move(g.x(), ny)
-            # 10초 지나면 낙하
             if self.climb_hold_until and now >= self.climb_hold_until:
                 self._end_climb_hold()
             return
@@ -615,7 +602,6 @@ class Pet(QtWidgets.QMainWindow):
 
         # Random Walk
         if self.random_walk:
-            # Idle 금지. 속도가 0이면 초기화
             if self.vx == 0:
                 self.vx = random.choice([-2.0, 2.0])
             nx = g.x() + int(self.vx)
@@ -627,7 +613,6 @@ class Pet(QtWidgets.QMainWindow):
             self.set_action("walk_right" if self.vx>0 else "walk_left")
             return
 
-        # 둘 다 아니면 Idle
         self.set_action("idle")
 
     def _clamp_to_screen(self):
@@ -655,7 +640,6 @@ class Pet(QtWidgets.QMainWindow):
         if self.random_walk and not self.follow_mouse:
             self.set_action("walk_right" if self.vx>0 else "walk_left")
         elif self.follow_mouse:
-            # 팔로우 중 Idle 금지
             self.set_action("run_right" if self.vx>0 else "run_left")
         else:
             self.set_action("idle")
@@ -667,7 +651,6 @@ class Pet(QtWidgets.QMainWindow):
         QtCore.QTimer.singleShot(800, self._end_jump)
 
     def _end_jump(self):
-        # 팔로우 중 근접하면 점프 유지
         if self.follow_mouse:
             g = self.geometry()
             mp = QtGui.QCursor.pos()

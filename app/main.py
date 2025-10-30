@@ -7,7 +7,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 # ================== 전역 설정 ==================
 CHAR_NAME = "Yujeong"
 BG_MODE   = "rembg"     # "chroma" or "rembg"
-SCALE     = 0.7         # 모든 모션 공통 스케일
+SCALE     = 0.5         # 모든 모션 공통 스케일
 BASE_DIR  = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 
 INITIAL_SYNC_FRAMES = 8       # GIF 잘림 방지: 초반 N프레임 강제 동기화
@@ -24,7 +24,7 @@ CACHE_HEAVY_ACTIONS = {
     "idle", "walk_left", "walk_right",
     "run_left", "run_right",
     "climb_left", "climb_right",
-    "hang"
+    "hang","jump"
 }
 
 # 액션 → 파일 경로
@@ -52,7 +52,7 @@ ACTIONS = {
 
 # 바닥 스냅 대상(작업표시줄 위에 앉아야 하는 것들)
 FLOOR_SNAP_ACTIONS = {
-    "dance","eat","pet","sleep","squat","boxing","plank","jumping_jacks"
+    "dance","jump","eat","pet","sleep","squat","boxing","plank","jumping_jacks"
 }
 
 # ---------- 화면 크기 얻기 ----------
@@ -184,6 +184,7 @@ class Pet(QtWidgets.QMainWindow):
         self.exercise_cycle = ["squat", "boxing", "plank", "jumping_jacks"]
         self.exercise_idx = 0
         self.exercise_timer = QtCore.QTimer(self)
+        # ❗ 여기에서 connect 했는데 정의가 없어서 에러가 났던 것
         self.exercise_timer.timeout.connect(self._exercise_next)
 
         # 임시 모션 강제
@@ -232,6 +233,19 @@ class Pet(QtWidgets.QMainWindow):
         self.click_times = deque(maxlen=8)
         self.click_window = 0.9
         self.drag_trace = deque(maxlen=6)
+
+    # -------------------------------------------------
+    # (빠졌던) 운동 사이클 함수
+    # -------------------------------------------------
+    def _exercise_next(self):
+        """운동 모드에서 10초마다 다음 운동으로 넘어가는 콜백."""
+        if self.mode != "exercise":
+            self.exercise_timer.stop()
+            return
+        # 다음 동작
+        self.exercise_idx = (self.exercise_idx + 1) % len(self.exercise_cycle)
+        next_action = self.exercise_cycle[self.exercise_idx]
+        self.set_action(next_action, force=True)
 
     # -------------------------------------------------
     # GIF 최대 크기 미리 뽑기
@@ -395,7 +409,6 @@ class Pet(QtWidgets.QMainWindow):
             self._apply_throw_velocity()
             g = self.geometry(); scr = available_geo(self)
             if self.mode in ("dance","exercise","sleep"):
-                # 모드 유지
                 if self.mode == "dance": self.set_action("dance", force=True)
                 elif self.mode == "sleep": self.set_action("sleep", force=True)
                 return
@@ -632,7 +645,6 @@ class Pet(QtWidgets.QMainWindow):
 
         # 0) 화면 위쪽에 닿으면 자동 매달리기
         if (not self.dragging) and (not self.stop_move) and (not in_climb) and g.y() <= scr.y() + EDGE_MARGIN:
-            # 위에 달라붙게
             self.move(g.x(), scr.y())
             if self.current_action != "hang":
                 self.set_action("hang", force=True)
@@ -736,7 +748,7 @@ class Pet(QtWidgets.QMainWindow):
             self.set_action("walk_right" if self.vx > 0 else "walk_left", force=True)
             return
 
-        # 5) 작업표시줄 위 걷기 (바닥에 붙어 있고, 다른 모드/팔로우 아님)
+        # 5) 작업표시줄 위 걷기
         if g.y() >= bottom and (not self.follow_mouse) and (not self.random_walk):
             nx = g.x() + self.tb_dir * 1
             if nx <= left_edge:

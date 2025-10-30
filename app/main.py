@@ -23,7 +23,7 @@ GRAVITY              = 1.1
 
 # 바운스
 BOUNCE_K             = 0.78
-BOUNCE_MAX           = 2
+BOUNCE_MAX           = 4
 BOUNCE_MIN_VEL       = 3.5
 BOUNCE_UP_VEL_FLOOR  = 11.0
 BOUNCE_CLEAR_EPS     = 2

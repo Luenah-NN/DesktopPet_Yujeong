@@ -9,10 +9,10 @@ CHAR_NAME = "Yujeong"
 BG_MODE   = "rembg"
 BASE_DIR  = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 
-# 애니메이션 공통
+# 디스플레이 / 애니
 DISPLAY_FPS   = 12
 DISPLAY_DELAY = 1.0 / DISPLAY_FPS
-MIN_FRAME_DELAY      = 40           # GIF 프레임 delay가 0인 것 방지
+MIN_FRAME_DELAY      = 40
 INITIAL_SYNC_FRAMES  = 2
 WINDOW_PAD           = 2
 
@@ -23,31 +23,30 @@ FLOOR_MARGIN  = 2
 # 물리
 GRAVITY              = 1.1
 BOUNCE_K             = 0.78
-BOUNCE_MAX           = 4
+BOUNCE_MAX           = 4        # ✅ 요청대로 4번까지
 BOUNCE_MIN_VEL       = 3.5
-BOUNCE_UP_VEL_FLOOR  = 11.0
+BOUNCE_UP_VEL_FLOOR  = 11.0     # 위로 튈 때 최소 속도
 
 # 당구(잡아던지기)
-# ✅ 임계속도 더 높임 (원래 7~8 근처) → 이제 웬만해선 안 튕김
 FREE_BOUNCE_SPEED_TH = 12.0
 FREE_BOUNCE_DAMP     = 0.78
 FREE_BOUNCE_FRICTION = 0.985
 FREE_BOUNCE_MIN_SPD  = 1.35
 
-# 마우스 따라가기 관련
+# 마우스 따라가기
 FOLLOW_JUMP_NEAR     = 60
 FOLLOW_JUMP_HOLD     = 0.6
 FOLLOW_FAST_DIST     = 400
 FOLLOW_RUN_DIST      = 200
 
-# ✅ 프리셋: "더 크게" 제거
+# ✅ 프리셋 (요청대로 “더 크게” 제거된 상태 유지)
 SCALE_PRESETS = [
     ("작게", 0.4),
     ("기본", 0.65),
     ("크게", 0.9),
 ]
 
-# 모션 경로
+# 모션
 ACTIONS = {
     "idle": "idle/idle.gif",
     "walk_left": "walk_left/walk_left.gif",
@@ -70,7 +69,7 @@ ACTIONS = {
     "sleep": "sleep/sleep.gif",
 }
 
-# 바닥에 안 붙여도 되는 모션
+# 바닥에 안 붙는 모션
 FLOOR_SNAP_EXCLUDE = {"climb_left", "climb_right", "hang"}
 
 
@@ -115,7 +114,7 @@ class Pet(QtWidgets.QMainWindow):
         super().__init__()
         self.mgr = manager
 
-        # 창 세팅
+        # 창
         self.setWindowTitle(CHAR_NAME)
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
         self.setAttribute(QtCore.Qt.WA_NoSystemBackground, True)
@@ -137,7 +136,7 @@ class Pet(QtWidgets.QMainWindow):
         # ✅ 멀티모니터 토글
         self.use_virtual_desktop = False
 
-        # 스케일 관련
+        # 스케일
         self.scale_base = 0.65
         self.scale      = self.scale_base
 
@@ -147,7 +146,7 @@ class Pet(QtWidgets.QMainWindow):
         self.giant_anim_target = self.scale_base
         self.giant_anim_start  = self.scale_base
         self.giant_anim_start_t = 0.0
-        self.giant_anim_dur    = 0.5  # ✅ 0.5초
+        self.giant_anim_dur     = 0.5  # 0.5초
 
         # 애니 캐시
         self.raw_animations  = {}
@@ -166,10 +165,9 @@ class Pet(QtWidgets.QMainWindow):
         self.current_frame_idx = 0
         self.next_frame_time   = time.monotonic()
         self._sync_frames_left = INITIAL_SYNC_FRAMES
-
-        self.current_pix_w = 64
-        self.current_pix_h = 64
-        self.current_floor_h = self.global_max_h
+        self.current_pix_w     = 64
+        self.current_pix_h     = 64
+        self.current_floor_h   = self.global_max_h
 
         # 물리
         self.vx, self.vy = 0.0, 0.0
@@ -181,7 +179,7 @@ class Pet(QtWidgets.QMainWindow):
 
         self.follow_mouse = False
         self.random_walk  = False
-        self.mode         = "normal"  # normal / dance / sleep / exercise
+        self.mode         = "normal"
         self.menu_open    = False
 
         self.follow_force_jump_until = 0.0
@@ -208,19 +206,19 @@ class Pet(QtWidgets.QMainWindow):
         self.bounce_count  = 0
         self.is_bouncing   = False
         self.free_bounce   = False
-        self.manual_drop   = False   # free-bounce 끝난 뒤 강제로 드랍 모드로
+        self.manual_drop   = False   # ✅ 이게 True면 “그 자리에서 떨어진다”
 
-        # ✅ 랜덤 이동 점프용
-        self.random_jump_static = False     # jump 1프레임 고정
-        self.random_jump_active = False     # 현재 랜덤점프 중인지
+        # 랜덤 점프
+        self.random_jump_static = False
+        self.random_jump_active = False
         self.random_jump_started_at = 0.0
 
-        # ✅ 모션 전환시 바운스 억제
+        # 모션 전환시 바운스 억제
         self.suppress_bounce_until = 0.0
 
-        # 먼지 (거인화 상태에서는 쓰지 않음)
+        # 먼지
         self.dust_label = None
-        self.dust_pix = None
+        self.dust_pix   = None
         self.last_dust_time = 0.0
 
         # 메뉴
@@ -242,7 +240,7 @@ class Pet(QtWidgets.QMainWindow):
         self.tick.start(16)
 
     # ============================================================
-    # 화면/데스크톱
+    # 화면 rect
     # ============================================================
     def _desktop_rect(self):
         if self.use_virtual_desktop:
@@ -254,7 +252,7 @@ class Pet(QtWidgets.QMainWindow):
         return scr.availableGeometry() if scr else QtCore.QRect(0,0,1920,1080)
 
     # ============================================================
-    # 디코딩 & 스케일링
+    # 디코딩
     # ============================================================
     def _predecode_all(self):
         base = BASE_DIR / "assets" / CHAR_NAME
@@ -312,7 +310,7 @@ class Pet(QtWidgets.QMainWindow):
             pix = movie.currentPixmap()
             if pix.isNull():
                 break
-            w = pix.width(); h = pix.height()
+            w, h = pix.width(), pix.height()
             max_w = max(max_w, w); max_h = max(max_h, h)
             frames.append(pix)
             d = movie.nextFrameDelay()
@@ -340,13 +338,13 @@ class Pet(QtWidgets.QMainWindow):
             pm = QtGui.QPixmap(p.as_posix())
             if pm.isNull():
                 continue
-            w = pm.width(); h = pm.height()
+            w, h = pm.width(), pm.height()
             max_w = max(max_w, w); max_h = max(max_h, h)
             frames.append(pm); delays.append(0.05)
         return frames, delays, max_w, max_h
 
     # ============================================================
-    # 바닥 스냅
+    # 바닥 높이 계산 (여기서 taskbar 겹침 방지)
     # ============================================================
     def _floor_y(self, use_global=False):
         desk = self._desktop_rect()
@@ -354,11 +352,16 @@ class Pet(QtWidgets.QMainWindow):
             h = self.global_max_h
         else:
             h = self.current_floor_h
-        return desk.y() + desk.height() - h - FLOOR_MARGIN
+        # 기본 바닥
+        floor = desk.y() + desk.height() - h - FLOOR_MARGIN
+        # ✅ 너무 커서 화면보다 클 때는 화면 맨 위에라도 붙인다
+        if floor < desk.y():
+            floor = desk.y()
+        return floor
 
     def _snap_floor(self, use_global=False):
-        # free-bounce 중일 땐 강제 스냅 안함
-        if self.free_bounce:
+        # free-bounce/수동낙하 중에는 강제 스냅하지 않음
+        if self.free_bounce or self.manual_drop:
             return
         fy = self._floor_y(use_global=use_global)
         self.move(self.x(), fy)
@@ -386,7 +389,7 @@ class Pet(QtWidgets.QMainWindow):
             self.size_actions.append(act)
         self.menu.addSeparator()
         self.act_giant  = self.menu.addAction("거인화 (토글)")
-        self.act_giant.setCheckable(True)  # ✅ 체크 되도록
+        self.act_giant.setCheckable(True)
         self.act_multi  = self.menu.addAction("멀티 모니터 이동 (토글)")
         self.menu.addSeparator()
         self.act_spawn  = self.menu.addAction("펫 추가")
@@ -401,7 +404,6 @@ class Pet(QtWidgets.QMainWindow):
         self.menu_open = True
         action = self.menu.exec_(self.mapToGlobal(ev.pos()))
         self.menu_open = False
-
         now = time.monotonic()
 
         if action == self.act_follow:
@@ -459,15 +461,14 @@ class Pet(QtWidgets.QMainWindow):
                 self._set_scale(self.scale_base)
             else:
                 self._set_scale(self.scale_base * 5.0)
+            # ✅ 프리셋 바꿔도 taskbar와 겹치지 않게
             self._snap_floor(use_global=True)
             self.suppress_bounce_until = now + 0.25
 
         elif action == self.act_giant:
             if self.is_giant:
-                # 거인 → 원래로
                 self._start_giant_anim(target=self.scale_base, dur=0.5)
             else:
-                # 원래 → 거인 (5배)
                 self._start_giant_anim(target=self.scale_base * 5.0, dur=0.5)
             self.suppress_bounce_until = now + 0.25
 
@@ -517,41 +518,42 @@ class Pet(QtWidgets.QMainWindow):
         self._rebuild_scaled_cache()
         if self.current_action:
             self._apply_current_frame()
-        self._snap_floor(use_global=True)
+        # ✅ 스케일 바꿀 때 free-bounce 중이면 바닥에 안붙임
+        if not self.free_bounce and not self.manual_drop:
+            self._snap_floor(use_global=True)
 
     def _start_giant_anim(self, target: float, dur: float = 0.5):
-        # ✅ 0.5초로 단축
         self.giant_anim_target  = target
         self.giant_anim_start   = self.scale
         self.giant_anim_start_t = time.monotonic()
         self.giant_anim_dur     = dur
-        # 거인 여부 갱신 (체크박스 표시)
         self.is_giant = target > self.scale_base + 1e-3
         if self.giant_anim_timer is None:
             self.giant_anim_timer = QtCore.QTimer(self)
             self.giant_anim_timer.timeout.connect(self._giant_anim_step)
-        self.giant_anim_timer.start(20)  # 좀 더 부드럽게
+        self.giant_anim_timer.start(20)
 
     def _giant_anim_step(self):
         now = time.monotonic()
         t = (now - self.giant_anim_start_t) / self.giant_anim_dur
         if t >= 1.0:
             self._set_scale(self.giant_anim_target)
-            self.giant_anim_timer.stop()
-            # 거인 상태에서도 바닥에 정확히
-            self._snap_floor(use_global=True)
+            if self.giant_anim_timer:
+                self.giant_anim_timer.stop()
+            # ✅ 거인화 끝나도 taskbar 안겹치게
+            if not self.free_bounce and not self.manual_drop:
+                self._snap_floor(use_global=True)
             self._refresh_menu_checks()
             return
         s = self.giant_anim_start + (self.giant_anim_target - self.giant_anim_start) * t
         self._set_scale(s)
-        # 계속 바닥에 붙여줌
-        self._snap_floor(use_global=True)
+        if not self.free_bounce and not self.manual_drop:
+            self._snap_floor(use_global=True)
 
     # ============================================================
     # 액션
     # ============================================================
     def set_action(self, key, force=False, suppress_bounce=True):
-        # 토글 상태에선 강제일 때만
         if self.mode in ("dance","sleep","exercise") and not force:
             return
         if not force and key == self.current_action:
@@ -562,14 +564,13 @@ class Pet(QtWidgets.QMainWindow):
         self.current_action = key
         self.current_frame_idx = 0
 
-        frames = self.animations[key]
         _, h = self.scaled_max_size.get(key, (self.current_pix_w, self.current_pix_h))
         self.current_floor_h = h
 
+        frames = self.animations[key]
         if frames:
             self._apply_frame(frames[0][0])
 
-        # 모션 바뀔 때 의도치 않은 바운스 막기
         if suppress_bounce:
             self.vy = 0.0
             self.bounce_count = 0
@@ -577,8 +578,7 @@ class Pet(QtWidgets.QMainWindow):
             self.is_bouncing = False
             self.suppress_bounce_until = time.monotonic() + 0.25
 
-        # 바닥 모션이면 바닥에 덮어주기
-        if key not in FLOOR_SNAP_EXCLUDE and not self.free_bounce:
+        if key not in FLOOR_SNAP_EXCLUDE and not self.free_bounce and not self.manual_drop:
             self._snap_floor(use_global=True)
 
     def _apply_frame(self, pix: QtGui.QPixmap):
@@ -603,11 +603,9 @@ class Pet(QtWidgets.QMainWindow):
     def _update_animation(self, now: float):
         if not self.current_action:
             return
-
-        # ✅ 랜덤 이동 점프 중에는 첫 프레임 고정
+        # 랜덤 점프 중에는 1프레임 고정
         if self.random_jump_static and self.current_action == "jump":
             return
-
         frames = self.animations.get(self.current_action)
         if not frames:
             return
@@ -622,7 +620,7 @@ class Pet(QtWidgets.QMainWindow):
         self.next_frame_time = now + DISPLAY_DELAY
 
     # ============================================================
-    # temp 액션
+    # temp
     # ============================================================
     def _play_temp(self, key, ms, stop_during=False):
         self.temp_token += 1
@@ -645,7 +643,7 @@ class Pet(QtWidgets.QMainWindow):
         QtCore.QTimer.singleShot(ms, _end)
 
     # ============================================================
-    # 마우스 입력
+    # 마우스
     # ============================================================
     def mousePressEvent(self, ev):
         if ev.button() == QtCore.Qt.LeftButton:
@@ -663,8 +661,6 @@ class Pet(QtWidgets.QMainWindow):
             if (ev.globalPos() - self.press_pos).manhattanLength() >= self.drag_threshold:
                 self.single_click_timer.stop()
                 self.dragging = True
-                # 토글 켜져 있어도 드래그는 돼야 함. 단 hang 모션만 안나오게 하자는 요구가 있었는데,
-                # 여기서는 hang 보여줘도 바닥에서 떨어질 때 bounce 억제 중이므로 부드러움.
                 if self.mode not in ("dance","sleep","exercise"):
                     self.set_action("hang", force=True, suppress_bounce=False)
         if self.dragging:
@@ -677,6 +673,11 @@ class Pet(QtWidgets.QMainWindow):
         if self.dragging:
             self.dragging = False
             self._apply_throw_velocity()
+            # ✅ 여기서 놓은 높이에서 떨어지게
+            if not self.free_bounce:
+                self.manual_drop = True
+                self.vy = 0.0
+                self.bounce_count = 0
             self.press_pos = None
             return
         self.press_pos = None
@@ -690,8 +691,6 @@ class Pet(QtWidgets.QMainWindow):
         self._do_single_click()
 
     def _do_single_click(self):
-        # ✅ 토글 중에도 클릭 모션은 안나오게 하자는 이전 요청이 있었는데,
-        # 지금은 Idle/랜덤/따라가기에서 안나온다고 해서 다시 허용
         if self.mode in ("dance","sleep","exercise"):
             return
         self._play_temp("surprise", 6000, stop_during=False)
@@ -705,19 +704,16 @@ class Pet(QtWidgets.QMainWindow):
         self.drag_trace.append((QtCore.QPoint(gpos), time.monotonic()))
 
     def _apply_throw_velocity(self):
-        # ✅ 토글 모션일 때 던지기 금지
+        # 토글 상태/거인화 상태에서는 던지기 금지
         if self.mode in ("dance","sleep","exercise"):
             self.free_bounce = False
             self.is_bouncing = False
             self.vx = 0.0; self.vy = 0.0
-            self._snap_floor(use_global=True)
             return
-        # ✅ 거인화일 때 던지기 금지
         if self.is_giant:
             self.free_bounce = False
             self.is_bouncing = False
             self.vx = 0.0; self.vy = 0.0
-            self._snap_floor(use_global=True)
             return
 
         if len(self.drag_trace) < 2:
@@ -732,16 +728,16 @@ class Pet(QtWidgets.QMainWindow):
         self.vy = dy / max(1.0, fps)
         speed = math.hypot(self.vx, self.vy)
 
-        # ✅ 임계속도 넘으면 당구 모드
         if speed >= FREE_BOUNCE_SPEED_TH:
             self.free_bounce = True
             self.is_bouncing = False
             self.manual_drop  = False
         else:
-            # 일반 바운스
             self.free_bounce = False
             self.is_bouncing = True
             self.bounce_count = 0
+            # ✅ 던지고 놓으면 그 높이에서 떨어지기
+            self.manual_drop = True
 
     # ============================================================
     # 운동
@@ -754,49 +750,18 @@ class Pet(QtWidgets.QMainWindow):
         self.set_action(self.exercise_cycle[self.exercise_idx], force=True, suppress_bounce=True)
 
     # ============================================================
-    # 먼지 (거인화에서는 X)
-    # ============================================================
-    def _ensure_dust_sprite(self):
-        if self.dust_label is not None:
-            return
-        self.dust_label = QtWidgets.QLabel(self)
-        pm = QtGui.QPixmap(44, 16)
-        pm.fill(QtCore.Qt.transparent)
-        painter = QtGui.QPainter(pm)
-        painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
-        color = QtGui.QColor(180, 180, 180, 140)
-        painter.setBrush(color)
-        painter.setPen(QtCore.Qt.NoPen)
-        painter.drawEllipse(2, 6, 14, 8)
-        painter.drawEllipse(14, 7, 16, 7)
-        painter.end()
-        self.dust_pix = pm
-        self.dust_label.setPixmap(pm)
-        self.dust_label.hide()
-
-    def _show_dust(self):
-        # ✅ 거인화 상태에서는 효과 제거
-        if self.is_giant:
-            return
-        self._ensure_dust_sprite()
-        self.dust_label.move(4, self.height() - self.dust_label.height())
-        self.dust_label.show()
-        QtCore.QTimer.singleShot(180, self.dust_label.hide)
-
-    # ============================================================
     # 메인 루프
     # ============================================================
     def update_loop(self):
         now = time.monotonic()
         self._update_animation(now)
 
-        # temp 끝났으면 idle
         if self.active_temp_action and now > self.force_action_until:
             self.active_temp_action = None
             if self.mode == "normal":
                 self.set_action("idle", force=True, suppress_bounce=True)
 
-        # free-bounce (당구) 모드
+        # free-bounce 우선
         if self.free_bounce:
             self._update_free_bounce()
             return
@@ -812,15 +777,16 @@ class Pet(QtWidgets.QMainWindow):
 
         in_climb = self.current_action in ("climb_left","climb_right")
 
-        # -------------------- 중력/바운스 --------------------
+        # -------------------- 낙하/바운스 --------------------
         if not self.dragging and not in_climb:
             if self.manual_drop:
-                # free-bounce 끝난 뒤 강제로 떨어지는 모드
+                # ✅ 이 모드에서는 “놓은 자리” 기준으로 떨어짐
                 self.vy += GRAVITY
                 ny = g.y() + int(self.vy)
                 if ny >= bottom:
-                    # 일반 바운스
-                    if abs(self.vy) > BOUNCE_MIN_VEL and self.bounce_count < BOUNCE_MAX and now > self.suppress_bounce_until:
+                    if (abs(self.vy) > BOUNCE_MIN_VEL and
+                        self.bounce_count < BOUNCE_MAX and
+                        now > self.suppress_bounce_until):
                         self.vy = -abs(self.vy) * BOUNCE_K
                         if self.vy > -BOUNCE_UP_VEL_FLOOR:
                             self.vy = -BOUNCE_UP_VEL_FLOOR
@@ -834,31 +800,24 @@ class Pet(QtWidgets.QMainWindow):
                     self.move(g.x(), ny)
                 else:
                     self.move(g.x(), ny)
-
             else:
                 # 일반 낙하
                 if g.y() < bottom - 0.5:
                     self.vy += GRAVITY
                     ny = g.y() + int(self.vy)
                     if ny >= bottom:
-                        # 억제 중이면 바운스 안함
-                        if now < self.suppress_bounce_until:
+                        if (abs(self.vy) > BOUNCE_MIN_VEL and
+                            self.bounce_count < BOUNCE_MAX and
+                            now > self.suppress_bounce_until):
+                            self.vy = -abs(self.vy) * BOUNCE_K
+                            if self.vy > -BOUNCE_UP_VEL_FLOOR:
+                                self.vy = -BOUNCE_UP_VEL_FLOOR     # ✅ 오타 수정
+                            self.bounce_count += 1
+                            ny = bottom - 1
+                        else:
+                            ny = bottom
                             self.vy = 0.0
                             self.bounce_count = 0
-                            self.move(g.x(), bottom)
-                        else:
-                            if abs(self.vy) > BOUNCE_MIN_VEL and self.bounce_count < BOUNCE_MAX:
-                                self.vy = -abs(self.vy) * BOUNCE_K
-                                if self.vy > -BOUNCE_UP_VLOOR:
-                                    pass  # 오타 방지용
-                                if self.vy > -BOUNCE_UP_VEL_FLOOR:
-                                    self.vy = -BOUNCE_UP_VEL_FLOOR
-                                self.bounce_count += 1
-                                ny = bottom - 1
-                            else:
-                                ny = bottom
-                                self.vy = 0.0
-                                self.bounce_count = 0
                         self.move(g.x(), ny)
                     else:
                         self.move(g.x(), ny)
@@ -873,7 +832,6 @@ class Pet(QtWidgets.QMainWindow):
             dist = abs(mp.x() - cx)
             global_bottom = self._floor_y(use_global=True)
 
-            # 가까우면 jump 유지
             if dist <= FOLLOW_JUMP_NEAR:
                 if now >= self.follow_force_jump_until:
                     self.follow_force_jump_until = now + FOLLOW_JUMP_HOLD
@@ -900,47 +858,34 @@ class Pet(QtWidgets.QMainWindow):
                 want = "walk_right" if dx > 0 else "walk_left"
             if want != self.current_action:
                 self.set_action(want, suppress_bounce=False)
-
-            # ✅ 거인화 상태에서는 먼지/흔들림 제거 → 아무것도 안함
             return
 
         # -------------------- 랜덤 이동 --------------------
         if self.random_walk and not self.dragging and self.mode == "normal" and not self.active_temp_action:
             bottom_g = self._floor_y(use_global=True)
 
-            # ✅ 랜덤 점프 중이면: 중력만 적용하고 가로 이동은 하지 않는다
             if self.random_jump_active:
-                # 착지했는지 확인
                 if self.y() >= bottom_g - 1 and abs(self.vy) < 0.01:
-                    # 착지 완료 → 점프 해제 + 1프레임 고정 해제
                     self.random_jump_active = False
                     self.random_jump_static = False
                     self.set_action("idle", suppress_bounce=True)
                 return
 
-            # 걷기
             vx = getattr(self, "rw_vx", None)
             if vx is None or vx == 0:
                 vx = random.choice([-2, -1, 1, 2])
             nx = self.x() + vx
-
             hit_left = False
             hit_right = False
-
             if nx <= left_edge:
-                nx = left_edge
-                vx = abs(vx)
-                hit_left = True
+                nx = left_edge; vx = abs(vx); hit_left = True
             elif nx >= right_edge:
-                nx = right_edge
-                vx = -abs(vx)
-                hit_right = True
+                nx = right_edge; vx = -abs(vx); hit_right = True
 
             self.rw_vx = vx
             self.move(nx, bottom_g)
             self.set_action("walk_right" if vx>0 else "walk_left", suppress_bounce=False)
 
-            # ✅ 벽에 닿으면 climb 보장
             if hit_left:
                 self.set_action("climb_left", force=True, suppress_bounce=False)
                 return
@@ -948,18 +893,16 @@ class Pet(QtWidgets.QMainWindow):
                 self.set_action("climb_right", force=True, suppress_bounce=False)
                 return
 
-            # ✅ 거인화 상태에서는 여기서 끝 (점프 안함)
             if self.is_giant:
                 return
 
-            # ✅ 랜덤 점프 (점프 중에는 계속 1프레임)
             if random.random() < 0.007:
                 self.set_action("jump", force=True, suppress_bounce=False)
                 self.current_frame_idx = 0
                 self._apply_current_frame()
                 self.vy = -13.0
-                self.random_jump_static = True     # 1프레임 고정
-                self.random_jump_active = True     # 착지할 때까지
+                self.random_jump_static = True
+                self.random_jump_active = True
                 self.random_jump_started_at = now
             return
 
@@ -973,7 +916,7 @@ class Pet(QtWidgets.QMainWindow):
                 self.set_action("idle", suppress_bounce=False)
 
     # ============================================================
-    # free-bounce (당구)
+    # free-bounce
     # ============================================================
     def _update_free_bounce(self):
         desk = self._desktop_rect()
@@ -1000,13 +943,12 @@ class Pet(QtWidgets.QMainWindow):
         self.vy *= FREE_BOUNCE_FRICTION
         speed = math.hypot(self.vx, self.vy)
         if speed < FREE_BOUNCE_MIN_SPD:
-            # ✅ 여기서 바로 바닥에 붙이지 말고
-            # 다음 루프에서 중력/바운스로 떨어지게
             self.free_bounce = False
             self.vx = 0.0
             self.vy = 0.0
             self.bounce_count = 0
-            self.manual_drop = True   # ← 이 플래그로 다음 루프에서 자연스럽게 떨어짐
+            # ✅ 여기서도 바닥으로 안 끌고가고, 다음 루프에서 제자리에서 떨어지게
+            self.manual_drop = True
 
 # ============================================================
 # main
@@ -1025,4 +967,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

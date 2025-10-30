@@ -7,26 +7,29 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 # ================= 전역 설정 =================
 CHAR_NAME = "Yujeong"
 BG_MODE   = "rembg"     # "chroma" or "rembg"
-SCALE     = 0.7
 BASE_DIR  = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 
-# 애니메이션 관련
-MIN_FRAME_DELAY = 40      # 일부 GIF가 0ms로 되어있을 때 최소값
-INITIAL_SYNC_FRAMES = 4   # 시작 몇 프레임은 강제로 사이즈 맞추기
-
-# 물리/화면
+MIN_FRAME_DELAY = 40      # GIF에 0ms 들어있는 거 방지
+INITIAL_SYNC_FRAMES = 4
 WINDOW_PAD   = 2
 EDGE_MARGIN  = 10
 FLOOR_MARGIN = 2
 GRAVITY      = 1.1
-BOUNCE_K     = 0.78       # ✅ 탄성 살짝 더 크게
+BOUNCE_K     = 0.78       # ✅ 탄성 조금 더
 THROW_ANGRY_SPEED = 1200.0
 
-# 마우스 따라가기 점프 떨림 방지용 히스테리시스
+# 마우스 따라가기 떨림 방지
 FOLLOW_JUMP_NEAR = 28
 FOLLOW_JUMP_FAR  = 46
 FOLLOW_RUN_DIST  = 200
 FOLLOW_FAST_DIST = 400
+
+# 해상도 프리셋
+SCALE_PRESETS = [
+    ("작게", 0.4),
+    ("기본", 0.65),
+    ("크게", 0.9),
+]
 
 ACTIONS = {
     "idle": "idle/idle.gif",
@@ -63,11 +66,10 @@ def available_geo(window: QtWidgets.QWidget) -> QtCore.QRect:
 
 
 # =====================================================
-# PetManager (충돌 회피 제거)
+# PetManager
 # =====================================================
 class PetManager(QtCore.QObject):
     MAX_PETS = 16
-
     def __init__(self, app):
         super().__init__()
         self.app = app
@@ -94,14 +96,14 @@ class PetManager(QtCore.QObject):
 
 
 # =====================================================
-# Pet 본체 (사전 디코딩 버전)
+# Pet (사전 디코딩 + PNG 시퀀스 + 해상도 프리셋)
 # =====================================================
 class Pet(QtWidgets.QMainWindow):
     def __init__(self, manager: PetManager):
         super().__init__()
         self.mgr = manager
 
-        # ----- 창 설정 -----
+        # 창 설정
         self.setWindowTitle(CHAR_NAME)
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
         self.setAttribute(QtCore.Qt.WA_NoSystemBackground, True)
@@ -114,14 +116,17 @@ class Pet(QtWidgets.QMainWindow):
         if os.path.exists(icon_path):
             self.setWindowIcon(QtGui.QIcon(icon_path))
 
-        # ----- 라벨 -----
+        # 라벨
         self.label = QtWidgets.QLabel(self)
         self.label.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
         self.label.setContentsMargins(0, 0, 0, 0)
         self.label.setScaledContents(False)
         self.setCentralWidget(self.label)
 
-        # ----- 상태/물리 -----
+        # 현재 스케일 (메뉴에서 바뀜)
+        self.scale = 0.65
+
+        # 상태/물리
         self.vx, self.vy = 0.0, 0.0
         self.dragging = False
         self.drag_offset = QtCore.QPoint(0, 0)
@@ -149,25 +154,27 @@ class Pet(QtWidgets.QMainWindow):
         self.temp_token = 0
         self._temp_stop_saved = {}
 
-        # 클릭
+        # 클릭 타이머
         self.single_click_timer = QtCore.QTimer(self)
         self.single_click_timer.setSingleShot(True)
         self.single_click_timer.timeout.connect(self._trigger_single_click)
 
-        # 등반
+        # 등반/팔로우
         self.climb_hold_until = 0.0
         self.climb_hold_timer = None
         self.follow_resume_dir = 0
         self.follow_resume_deadline = 0.0
         self.force_run_until = 0.0
 
-        # ====== 🔥 모든 모션 사전 디코딩 ======
-        self.animations = {}     # action -> list of (QPixmap, delay_ms)
-        self.anim_max_size = {}  # action -> (w, h)
-        self.global_max_w = 1
-        self.global_max_h = 1
+        # ===== 사전 디코딩 저장소 =====
+        self.raw_animations = {}     # action -> list[(QPixmap, delay_sec)]
+        self.animations     = {}     # action -> list[(QPixmap, delay_sec)] (scaled)
+        self.anim_max_size  = {}     # action -> (w, h) original
+        self.global_max_w   = 1
+        self.global_max_h   = 1
 
-        self._predecode_all()
+        self._predecode_all()        # 원본 프레임 다 읽기
+        self._rebuild_scaled_cache() # 현재 self.scale 기준으로 다시 만들기
 
         # 현재 애니 상태
         self.current_action = None
@@ -181,12 +188,10 @@ class Pet(QtWidgets.QMainWindow):
         # 초기 모션: idle
         self.set_action("idle", force=True)
 
-        # 메인 틱 (물리/로직)
+        # 메인 틱
         self.tick = QtCore.QTimer(self)
         self.tick.timeout.connect(self.update_loop)
-        self.tick.start(16)  # 60fps 근사
-
-        # 애니메이션 틱은 update_loop 안에서 now 기준으로 처리
+        self.tick.start(16)
 
         # 시작 위치
         scr = available_geo(self)
@@ -195,75 +200,119 @@ class Pet(QtWidgets.QMainWindow):
         self.move(start_x, start_y)
         self._clamp_to_screen()
 
-        # 입력 기록
+        # 드래그 기록
         self.drag_trace = deque(maxlen=6)
 
     # -------------------------------------------------
-    # 모든 모션 사전 디코딩
+    # 사전 디코딩
     # -------------------------------------------------
     def _predecode_all(self):
+        base = BASE_DIR / "assets" / CHAR_NAME
         for action, rel_path in ACTIONS.items():
-            path = (BASE_DIR / "assets" / CHAR_NAME / rel_path).as_posix()
-            frames, delays, max_w, max_h = self._decode_gif(path)
-            self.animations[action] = list(zip(frames, delays))
+            gif_path = base / rel_path
+            if gif_path.exists():
+                frames, delays, max_w, max_h = self._decode_gif(str(gif_path))
+            else:
+                # PNG 시퀀스: 같은 폴더에서 png/webp/jpg 읽기
+                png_dir = gif_path.parent
+                frames, delays, max_w, max_h = self._decode_png_folder(png_dir)
+            self.raw_animations[action] = list(zip(frames, delays))
             self.anim_max_size[action] = (max_w, max_h)
-            self.global_max_w = max(self.global_max_w, int(max_w * SCALE))
-            self.global_max_h = max(self.global_max_h, int(max_h * SCALE))
 
-        # 전부 읽었으니 창/라벨을 가장 큰 걸로 고정
+    def _rebuild_scaled_cache(self):
+        """self.scale 바꿀 때마다 호출해서 scaled 캐시 다시 만든다."""
+        self.animations = {}
+        self.global_max_w = 1
+        self.global_max_h = 1
+
+        for action, raw_list in self.raw_animations.items():
+            scaled_list = []
+            max_w = 1
+            max_h = 1
+            for (pm, delay) in raw_list:
+                if pm.isNull():
+                    # 더미 하나
+                    spm = QtGui.QPixmap(32, 32)
+                    spm.fill(QtCore.Qt.transparent)
+                    scaled_list.append((spm, delay))
+                    max_w = max(max_w, 32)
+                    max_h = max(max_h, 32)
+                    continue
+                w = pm.width()
+                h = pm.height()
+                sw = max(1, int(w * self.scale))
+                sh = max(1, int(h * self.scale))
+                spm = pm.scaled(sw, sh, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+                scaled_list.append((spm, delay))
+                max_w = max(max_w, sw)
+                max_h = max(max_h, sh)
+            self.animations[action] = scaled_list
+            self.global_max_w = max(self.global_max_w, max_w)
+            self.global_max_h = max(self.global_max_h, max_h)
+
+        # 창/라벨을 전역 최대 크기로 고정
         self.label.resize(self.global_max_w, self.global_max_h)
         self.setFixedSize(self.global_max_w + WINDOW_PAD, self.global_max_h + WINDOW_PAD)
 
     def _decode_gif(self, path):
-        """GIF를 전부 프레임으로 풀어서 (scaled QPixmap 리스트, delay 리스트, max_w, max_h) 리턴"""
-        if not os.path.exists(path):
-            # 없는 경우 더미 하나
-            pm = QtGui.QPixmap(64, 64)
-            pm.fill(QtCore.Qt.transparent)
-            return [pm], [200], 64, 64
-
         movie = QtGui.QMovie(path)
         frames = []
         delays = []
         max_w = 1
         max_h = 1
-
-        frame_idx = 0
+        idx = 0
         while True:
-            if not movie.jumpToFrame(frame_idx):
+            if not movie.jumpToFrame(idx):
                 break
-            # 원본 픽스맵
             pix = movie.currentPixmap()
             if pix.isNull():
                 break
-
-            # 크기 기록
             w = pix.width()
             h = pix.height()
             max_w = max(max_w, w)
             max_h = max(max_h, h)
-
-            # 스케일 적용 (사전 스케일 → 런타임 부담 ↓)
-            if SCALE != 1.0:
-                scaled = pix.scaled(int(w * SCALE), int(h * SCALE), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
-            else:
-                scaled = pix
-
-            frames.append(scaled)
-
-            # delay
+            frames.append(pix)
             d = movie.nextFrameDelay()
             if d <= 0:
                 d = MIN_FRAME_DELAY
-            delays.append(d / 1000.0)  # 초 단위로 저장
-
-            frame_idx += 1
-
+            delays.append(d / 1000.0)
+            idx += 1
         if not frames:
             pm = QtGui.QPixmap(64, 64)
             pm.fill(QtCore.Qt.transparent)
             return [pm], [0.2], 64, 64
+        return frames, delays, max_w, max_h
 
+    def _decode_png_folder(self, folder: Path):
+        # PNG / WEBP / JPG 순서대로
+        if not folder.exists():
+            pm = QtGui.QPixmap(64, 64)
+            pm.fill(QtCore.Qt.transparent)
+            return [pm], [0.2], 64, 64
+
+        files = sorted(
+            [p for p in folder.iterdir() if p.suffix.lower() in (".png", ".webp", ".jpg", ".jpeg")],
+            key=lambda p: p.name
+        )
+        if not files:
+            pm = QtGui.QPixmap(64, 64)
+            pm.fill(QtCore.Qt.transparent)
+            return [pm], [0.2], 64, 64
+
+        frames = []
+        delays = []
+        max_w = 1
+        max_h = 1
+        for p in files:
+            pm = QtGui.QPixmap(p.as_posix())
+            if pm.isNull():
+                continue
+            w = pm.width()
+            h = pm.height()
+            max_w = max(max_w, w)
+            max_h = max(max_h, h)
+            frames.append(pm)
+            delays.append(0.12)  # PNG 시퀀스는 120ms로
         return frames, delays, max_w, max_h
 
     # -------------------------------------------------
@@ -271,6 +320,7 @@ class Pet(QtWidgets.QMainWindow):
     # -------------------------------------------------
     def _make_menu(self):
         self.menu = QtWidgets.QMenu(self)
+
         self.act_follow = self.menu.addAction("마우스 따라가기")
         self.act_random = self.menu.addAction("랜덤 이동")
         self.menu.addSeparator()
@@ -279,6 +329,20 @@ class Pet(QtWidgets.QMainWindow):
         self.act_pet    = self.menu.addAction("쓰다듬기 (10초)")
         self.act_ex     = self.menu.addAction("운동하기 (토글)")
         self.act_sleep  = self.menu.addAction("잠자기 (토글)")
+        self.menu.addSeparator()
+        # 해상도 프리셋 서브메뉴
+        self.size_menu = self.menu.addMenu("크기")
+        self.size_actions = []
+        for name, scale in SCALE_PRESETS:
+            act = self.size_menu.addAction(name)
+            act.setCheckable(True)
+            act._scale_value = scale
+            self.size_actions.append(act)
+        # 기본값 체크
+        for act in self.size_actions:
+            if abs(act._scale_value - self.scale) < 1e-6:
+                act.setChecked(True)
+
         self.menu.addSeparator()
         self.act_spawn  = self.menu.addAction("펫 추가")
         self.act_close  = self.menu.addAction("이 펫 닫기")
@@ -292,11 +356,26 @@ class Pet(QtWidgets.QMainWindow):
         self.act_dance.setChecked(self.mode == "dance")
         self.act_ex.setChecked(self.mode == "exercise")
         self.act_sleep.setChecked(self.mode == "sleep")
+        # 크기 메뉴는 따로
 
     def contextMenuEvent(self, ev):
         self.menu_open = True
         action = self.menu.exec_(self.mapToGlobal(ev.pos()))
         self.menu_open = False
+
+        if action in self.size_actions:
+            # 크기 변경
+            new_scale = action._scale_value
+            self.scale = new_scale
+            for act in self.size_actions:
+                act.setChecked(act is action)
+            # 스케일 다시 빌드
+            self._rebuild_scaled_cache()
+            # 현재 액션 프레임도 다시 적용
+            if self.current_action:
+                self.current_frame_idx = 0
+                self._apply_current_frame()
+            return
 
         if action == self.act_follow:
             self.follow_mouse = not self.follow_mouse
@@ -331,8 +410,7 @@ class Pet(QtWidgets.QMainWindow):
 
         elif action == self.act_sleep:
             if self.mode == "sleep":
-                self._exit_modes()
-                self.set_action("idle")
+                self._exit_modes(); self.set_action("idle")
             else:
                 self._exit_modes()
                 self.mode = "sleep"; self.stop_move = True
@@ -372,7 +450,7 @@ class Pet(QtWidgets.QMainWindow):
         self.set_action(self.exercise_cycle[self.exercise_idx], force=True)
 
     # -------------------------------------------------
-    # 입력
+    # 입력 / 클릭
     # -------------------------------------------------
     def mousePressEvent(self, ev):
         if ev.button() == QtCore.Qt.LeftButton:
@@ -405,30 +483,46 @@ class Pet(QtWidgets.QMainWindow):
     def mouseReleaseEvent(self, ev):
         if ev.button() != QtCore.Qt.LeftButton:
             return
-        if self.dragging:
-            self.dragging = False
-            self._apply_throw_velocity()
-            g = self.geometry(); scr = available_geo(self)
-            if self.mode in ("dance","exercise","sleep"):
-                return
-            if g.x() <= scr.x() + EDGE_MARGIN:
-                self._enter_climb("left"); return
-            if g.x() >= scr.x() + scr.width() - self.width() - EDGE_MARGIN:
-                self._enter_climb("right"); return
-            if self.current_action != "hang":
-                self.set_action("hang")
-            self.vy = max(self.vy, 2.5)
+        # 드래그가 아니었다 → 싱글클릭 확정
+        if not self.dragging:
+            if self.single_click_timer.isActive():
+                self.single_click_timer.stop()
+                self._trigger_single_click()
+            return
+
+        # 드래그였다 → 던지기
+        self.dragging = False
+        self._apply_throw_velocity()
+        g = self.geometry(); scr = available_geo(self)
+        if self.mode in ("dance","exercise","sleep"):
+            return
+        if g.x() <= scr.x() + EDGE_MARGIN:
+            self._enter_climb("left"); return
+        if g.x() >= scr.x() + scr.width() - self.width() - EDGE_MARGIN:
+            self._enter_climb("right"); return
+
+        # 랜덤이동 중에는 던진 뒤 속도 리셋 (속도 폭주 방지)
+        if self.random_walk:
+            self.vx = 2.0 if self.vx >= 0 else -2.0
+
+        if self.current_action != "hang":
+            self.set_action("hang")
+        self.vy = max(self.vy, 2.5)
 
     def mouseDoubleClickEvent(self, ev):
         if ev.button() == QtCore.Qt.LeftButton:
-            self.single_click_timer.stop()
+            # 싱글클릭 예약 취소
+            if self.single_click_timer.isActive():
+                self.single_click_timer.stop()
+            # 더블클릭 → angry
             self.play_temp("angry", 5000)
 
     def _trigger_single_click(self):
+        # 실제로 surprise 모션 호출
         self.play_temp("surprise", 5000)
 
     # -------------------------------------------------
-    # 드래그 속도 → 던지기
+    # 드래그 속도
     # -------------------------------------------------
     def _record_drag_point(self, gpos: QtCore.QPoint):
         self.drag_trace.append((QtCore.QPoint(gpos), time.monotonic()))
@@ -477,14 +571,13 @@ class Pet(QtWidgets.QMainWindow):
         self.set_action("idle")
 
     # -------------------------------------------------
-    # 액션/애니 전환 (사전 디코딩 사용)
+    # 액션 전환 / 프레임 적용
     # -------------------------------------------------
     def set_action(self, key, force=False):
         if not force and key == self.current_action:
             return
         if key not in self.animations:
             return
-
         self.current_action = key
         self.current_frame_idx = 0
         now = time.monotonic()
@@ -495,20 +588,28 @@ class Pet(QtWidgets.QMainWindow):
         else:
             self.next_frame_time = now + 0.2
 
-        # 바닥 스냅
         if key in FLOOR_SNAP_ACTIONS:
             self._snap_floor()
 
     def _apply_frame(self, pix: QtGui.QPixmap):
-        # label/window는 이미 global max로 잡혀있음 → 그냥 pix만 교체
         self.label.setPixmap(pix)
         if BG_MODE == "chroma":
             self.setMask(pix.createMaskFromColor(QtGui.QColor(255,255,255), QtCore.Qt.MaskOutColor))
         else:
             self.clearMask()
 
+    def _apply_current_frame(self):
+        if not self.current_action:
+            return
+        frames = self.animations.get(self.current_action)
+        if not frames:
+            return
+        idx = min(self.current_frame_idx, len(frames)-1)
+        pix, _ = frames[idx]
+        self._apply_frame(pix)
+
     # -------------------------------------------------
-    # 애니메이션 한 프레임 진행
+    # 애니 업데이트
     # -------------------------------------------------
     def _update_animation(self, now: float):
         if not self.current_action:
@@ -518,7 +619,6 @@ class Pet(QtWidgets.QMainWindow):
             return
         if now < self.next_frame_time:
             return
-
         self.current_frame_idx = (self.current_frame_idx + 1) % len(frames)
         pix, delay = frames[self.current_frame_idx]
         self._apply_frame(pix)
@@ -540,7 +640,7 @@ class Pet(QtWidgets.QMainWindow):
     def _snap_floor(self):
         scr = available_geo(self)
         bottom_y = scr.y() + scr.height() - self.height() - FLOOR_MARGIN
-        self.move(self.x(), bottom_y)
+        self.move(self.x() or scr.x()+40, bottom_y)
 
     def _enter_climb(self, side: str):
         if side == "left":
@@ -569,13 +669,12 @@ class Pet(QtWidgets.QMainWindow):
     def update_loop(self):
         now = time.monotonic()
 
-        # 먼저 애니 진행
+        # 애니먼저
         self._update_animation(now)
 
         if self.menu_open:
             return
         if self.mode in ("dance","exercise","sleep"):
-            # 이런 모드들은 제자리 애니만
             return
 
         g = self.geometry()
@@ -593,9 +692,8 @@ class Pet(QtWidgets.QMainWindow):
                 ny = min(bottom, g.y() + int(self.vy))
                 self.move(g.x(), ny)
                 if ny >= bottom:
-                    # 착지
                     if abs(self.vy) > 3.5:
-                        self.vy = -abs(self.vy) * BOUNCE_K   # ✅ 탄성 증가
+                        self.vy = -abs(self.vy) * BOUNCE_K
                         self.vx *= 0.9
                     else:
                         self.vy = 0.0
@@ -621,37 +719,36 @@ class Pet(QtWidgets.QMainWindow):
             dx = mp.x() - cx
             dist = abs(dx)
 
-            # 커서가 가까워졌을 때 jump가 덜덜 떨리는 문제 → 히스테리시스
+            # 히스테리시스 jump
             if dist <= FOLLOW_JUMP_NEAR and now >= self.jump_cooldown_until:
                 if not self.follow_near_lock:
                     self.set_action("jump", force=True)
                     self.follow_near_lock = True
-                    self.jump_cooldown_until = now + 0.35  # 0.35초는 다시 점프 안 함
+                    self.jump_cooldown_until = now + 0.35
                 return
             elif dist >= FOLLOW_JUMP_FAR:
                 self.follow_near_lock = False
 
-            # 바닥에서만 걷고 뛴다
             if g.y() >= bottom:
-                # 속도 결정
                 speed = 6 if (now < self.force_run_until or dist > FOLLOW_FAST_DIST) else 3
                 step = speed if dx > 0 else -speed
                 nx = g.x() + step
                 nx = max(left_edge, min(right_edge, nx))
                 self.move(nx, g.y())
-
-                # 액션은 방향 바뀔 때만
                 if dist > FOLLOW_RUN_DIST:
                     want = "run_right" if dx > 0 else "run_left"
                 else:
                     want = "walk_right" if dx > 0 else "walk_left"
                 if want != self.current_action:
                     self.set_action(want)
-
             return
 
         # 4) 랜덤 이동
         if self.random_walk:
+            # 여기서도 속도 폭주 방지
+            if abs(self.vx) > 3.0:
+                self.vx = 3.0 if self.vx > 0 else -3.0
+
             if self.vx == 0:
                 self.vx = random.choice([-2.0, 2.0])
             nx = g.x() + int(self.vx)
@@ -665,12 +762,11 @@ class Pet(QtWidgets.QMainWindow):
                 self.set_action(want)
             return
 
-        # 5) 기본은 idle
+        # 5) 기본
         if self.current_action != "idle":
             self.set_action("idle")
 
-# =====================================================
-# main
+
 # =====================================================
 def main():
     QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)

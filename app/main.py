@@ -9,7 +9,7 @@ CHAR_NAME = "Yujeong"
 BG_MODE   = "rembg"     # "chroma" or "rembg"
 BASE_DIR  = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 
-# 표시용 fps (모든 모션 12fps로)
+# 모든 모션 12fps로
 DISPLAY_FPS   = 12
 DISPLAY_DELAY = 1.0 / DISPLAY_FPS
 
@@ -21,20 +21,19 @@ FLOOR_MARGIN         = 2
 
 GRAVITY              = 1.1
 
-# ★ 바운스 관련 파라미터
-BOUNCE_K             = 0.75     # 튕길 때 위로 되돌릴 비율
-BOUNCE_MAX           = 3        # 최대 2번까지 튕김
-BOUNCE_MIN_VEL       = 3.5      # 이 속도보다 느리면 튕기지 않음
-BOUNCE_UP_VEL_FLOOR  = 11.0     # 최소로 위로 튕길 속도
-BOUNCE_CLEAR_EPS     = 2        # 바닥에서 이만큼 띄워두면 다음 프레임에서 안 죽음
+# 바운스
+BOUNCE_K             = 0.78
+BOUNCE_MAX           = 2
+BOUNCE_MIN_VEL       = 3.5
+BOUNCE_UP_VEL_FLOOR  = 11.0
+BOUNCE_CLEAR_EPS     = 2
 
 THROW_ANGRY_SPEED    = 1200.0
 
 # 마우스 따라가기 점프
-FOLLOW_JUMP_NEAR     = 60       # 커서와 이 거리 이하면 jump 모드
-FOLLOW_JUMP_HOLD     = 0.6      # jump 모드 유지 시간
-FOLLOW_JUMP_COOLDOWN = 0.8      # (지금은 거의 안 쓰지만 남겨둠)
-
+FOLLOW_JUMP_NEAR     = 60
+FOLLOW_JUMP_HOLD     = 0.6
+FOLLOW_JUMP_COOLDOWN = 0.8  # (남겨둠)
 FOLLOW_RUN_DIST      = 200
 FOLLOW_FAST_DIST     = 400
 CURSOR_STILL_EPS     = 3
@@ -171,9 +170,7 @@ class Pet(QtWidgets.QMainWindow):
         # 점프 상태
         self.jump_cooldown_until = 0.0
         self.jump_hold_until     = 0.0
-
-        # ★ 마우스 따라가기에서 "가까워졌으니 무조건 점프 모드" 구간
-        self.follow_force_jump_until = 0.0
+        self.follow_force_jump_until = 0.0  # ← 가까워졌을 때 강제 jump 유지용
 
         # 커서 기록
         self.last_cursor_pos = QtCore.QPoint(0, 0)
@@ -188,7 +185,7 @@ class Pet(QtWidgets.QMainWindow):
         # 임시 모션
         self.force_action_until = 0.0
         self.temp_token = 0
-        self.active_temp_action = None
+        self.active_temp_action = None   # ← eat/pet 같은 거 들어있음
 
         # 클릭
         self.single_click_timer = QtCore.QTimer(self)
@@ -202,9 +199,9 @@ class Pet(QtWidgets.QMainWindow):
         self.follow_resume_deadline = 0.0
         self.force_run_until = 0.0
 
-        # ✅ 바운스 상태
+        # 바운스 상태
         self.bounce_count  = 0
-        self.is_bouncing   = False     # ← 이게 True면 다음 프레임에서 바닥에 붙이지 않음
+        self.is_bouncing   = False
 
         # 메뉴
         self._make_menu()
@@ -361,6 +358,7 @@ class Pet(QtWidgets.QMainWindow):
         action = self.menu.exec_(self.mapToGlobal(ev.pos()))
         self.menu_open = False
 
+        # 크기 변경
         if action in self.size_actions:
             self.scale = action._scale_value
             for a in self.size_actions:
@@ -374,13 +372,21 @@ class Pet(QtWidgets.QMainWindow):
                     self._snap_floor()
             return
 
+        # 마우스 따라가기
         if action == self.act_follow:
+            # ✅ 토글 켜져있으면 우선 끄고 follow
+            if self.mode in ("dance","exercise","sleep"):
+                self._exit_modes()
             self.follow_mouse = not self.follow_mouse
             if self.follow_mouse:
                 self.random_walk = False
                 self.stop_move = False
 
+        # 랜덤 이동
         elif action == self.act_random:
+            # ✅ 토글 켜져있으면 우선 끄고 random
+            if self.mode in ("dance","exercise","sleep"):
+                self._exit_modes()
             self.random_walk = not self.random_walk
             if self.random_walk:
                 self.follow_mouse = False
@@ -390,15 +396,16 @@ class Pet(QtWidgets.QMainWindow):
             else:
                 self.vx = 0.0
 
+        # 춤추기
         elif action == self.act_dance:
             if self.mode == "dance":
-                self.mode = "normal"; self.stop_move = False
-                self.set_action("idle", force=True); self._snap_floor()
+                self._exit_modes(); self.set_action("idle", force=True); self._snap_floor()
             else:
                 self._exit_modes()
                 self.mode = "dance"; self.stop_move = True
                 self.set_action("dance", force=True); self._snap_floor()
 
+        # 운동하기
         elif action == self.act_ex:
             if self.mode == "exercise":
                 self._exit_modes(); self.set_action("idle", force=True); self._snap_floor()
@@ -411,6 +418,7 @@ class Pet(QtWidgets.QMainWindow):
                 self.exercise_timer.start(10_000)
                 self._snap_floor()
 
+        # 잠자기
         elif action == self.act_sleep:
             if self.mode == "sleep":
                 self._exit_modes(); self.set_action("idle", force=True); self._snap_floor()
@@ -419,13 +427,19 @@ class Pet(QtWidgets.QMainWindow):
                 self.mode = "sleep"; self.stop_move = True
                 self.set_action("sleep", force=True); self._snap_floor()
 
+        # 간식주기
         elif action == self.act_eat:
-            if self.mode not in ("dance","sleep","exercise"):
-                self.play_temp("eat", 6000, stop_during_temp=True)
+            # ✅ 토글 켜져있으면 끄고 실행
+            if self.mode in ("dance","sleep","exercise"):
+                self._exit_modes()
+            self.play_temp("eat", 6000, stop_during_temp=True)
 
+        # 쓰다듬기
         elif action == self.act_pet:
-            if self.mode not in ("dance","sleep","exercise"):
-                self.play_temp("pet", 6000, stop_during_temp=True)
+            # ✅ 토글 켜져있으면 끄고 실행
+            if self.mode in ("dance","sleep","exercise"):
+                self._exit_modes()
+            self.play_temp("pet", 6000, stop_during_temp=True)
 
         elif action == self.act_spawn:
             g = self.geometry()
@@ -469,16 +483,28 @@ class Pet(QtWidgets.QMainWindow):
             if (ev.globalPos() - self.press_pos).manhattanLength() >= self.drag_threshold:
                 self.single_click_timer.stop()
                 self.dragging = True
-                if self.mode not in ("dance","sleep","exercise"):
+
+                # ✅ 간식/쓰다듬기 중에도 드래그하면 바로 hang으로! (temp 해제)
+                if self.active_temp_action in ("eat", "pet"):
+                    self.active_temp_action = None
+                    self.force_action_until = 0.0
+                    self.stop_move = False
                     self.set_action("hang", force=True)
+                else:
+                    if self.mode not in ("dance","sleep","exercise"):
+                        self.set_action("hang", force=True)
+
         if self.dragging:
             self._record_drag_point(ev.globalPos())
             self.move(ev.globalPos() - self.drag_offset)
             self._clamp_to_screen()
             self.bounce_count = 0
             self.is_bouncing = False
+
+            # 토글 모드일 때는 여기까지 (끌기는 되되, 밑에 벽 감지는 안 해도 됨)
             if self.mode in ("dance","sleep","exercise"):
                 return
+
             g = self.geometry(); scr = available_geo(self)
             if g.x() <= scr.x() + EDGE_MARGIN:
                 self._enter_climb("left")
@@ -508,6 +534,7 @@ class Pet(QtWidgets.QMainWindow):
         else:
             self.vy = max(self.vy, 9.0)
 
+        # 토글 모드면 여기서 끝
         if self.mode in ("dance","sleep","exercise"):
             self.press_pos = None
             return
@@ -558,6 +585,8 @@ class Pet(QtWidgets.QMainWindow):
 
     # ==================== 임시 모션 ====================
     def play_temp(self, key, hold_ms, on_done=None, stop_during_temp=False):
+        # 여기까지 오기 전에 contextMenu에서 토글을 끄게 해놨으므로
+        # 여기서는 모드 검사 그대로 둔다
         if self.mode in ("dance","sleep","exercise"):
             return
         self.temp_token += 1
@@ -593,6 +622,7 @@ class Pet(QtWidgets.QMainWindow):
         if self.active_temp_action and key != self.active_temp_action:
             self.active_temp_action = None
             self.force_action_until = 0.0
+            self.stop_move = False
         if not force and key == self.current_action:
             return
         if key not in self.animations:
@@ -726,7 +756,7 @@ class Pet(QtWidgets.QMainWindow):
         bottom     = self._floor_y()
         in_climb   = self.current_action in ("climb_left","climb_right")
 
-        # ★★★ 1) 튕기는 중이면 여기서만 처리하고 끝낸다
+        # 1) 튕기는 중
         if self.is_bouncing:
             self.vy += GRAVITY
             ny = g.y() + int(self.vy)
@@ -787,37 +817,32 @@ class Pet(QtWidgets.QMainWindow):
                 self._end_climb_hold()
             return
 
-        # 5) ★ 마우스 따라가기 (버벅임 제거 버전)
+        # 5) 마우스 따라가기 (버벅임 제거 버전)
         if self.follow_mouse:
             mp = QtGui.QCursor.pos()
             cx = g.x() + self.current_pix_w // 2
             dist = abs(mp.x() - cx)
 
-            # 5-1) jump zone : 들어온 순간부터 강제 jump 유지
+            # jump zone
             if dist <= FOLLOW_JUMP_NEAR:
-                # jump 유지 시간 갱신
                 if now >= self.follow_force_jump_until:
                     self.follow_force_jump_until = now + FOLLOW_JUMP_HOLD
-                # jump 고정
                 if self.current_action != "jump":
                     self.set_action("jump", force=True)
-                # 가로 이동 막기
                 self.vx = 0.0
                 self.move(g.x(), min(g.y(), bottom))
                 self.last_cursor_pos = mp
                 self.last_cursor_t = now
                 return
 
-            # 5-2) jump zone에서 벗어났으면 강제 jump 풀기
             if now < self.follow_force_jump_until:
-                # 아직 유지시간이라면 그대로 jump 유지
                 if self.current_action != "jump":
                     self.set_action("jump", force=True)
                 self.last_cursor_pos = mp
                 self.last_cursor_t = now
                 return
 
-            # 5-3) 여기까지 왔으면 평소 run/walk
+            # 평소 run/walk
             if g.y() >= bottom:
                 dx = mp.x() - cx
                 speed = 6 if (now < self.force_run_until or dist > FOLLOW_FAST_DIST) else 3

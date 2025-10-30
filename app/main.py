@@ -151,7 +151,7 @@ class Pet(QtWidgets.QMainWindow):
         self.scaled_max_size  = {}
         self.global_max_h     = 64
 
-        # ⭐ climb 유지 관련
+        # ⭐ Climb 유지 시간
         self.CLIMB_HOLD_SEC = 6.0
         self.climb_locked_from_drag = False
         self.climb_lock_expire = 0.0
@@ -634,6 +634,7 @@ class Pet(QtWidgets.QMainWindow):
             self._record_drag(ev.globalPos())
             self.move(ev.globalPos() - self.drag_offset)
 
+            # 드래그 중 양쪽 벽 → climb (follow/random 켜져 있어도 허용)
             if self.mode not in ("dance","sleep","exercise") and not self.is_giant:
                 desk = self._desktop_rect()
                 g = self.geometry()
@@ -658,6 +659,7 @@ class Pet(QtWidgets.QMainWindow):
 
         if self.dragging:
             self.dragging = False
+            # 토글 중엔 떨어지지 않음
             if self.mode in ("dance","sleep","exercise"):
                 self.manual_drop = False
                 self.free_bounce = False
@@ -666,6 +668,7 @@ class Pet(QtWidgets.QMainWindow):
                 self.press_pos = None
                 return
 
+            # 드래그로 만들어진 climb면 그냥 벽에 박아두기
             if self.is_climbing and self.climb_locked_from_drag:
                 self.manual_drop = False
                 self.free_bounce = False
@@ -676,6 +679,7 @@ class Pet(QtWidgets.QMainWindow):
                 self.press_pos = None
                 return
 
+            # 그 외에는 던지기/수동낙하 계산
             self._apply_throw_velocity()
             self.press_pos = None
             return
@@ -758,21 +762,21 @@ class Pet(QtWidgets.QMainWindow):
             self.free_bounce = False
             return
 
-        # ⭐ 여기: 드래그로 만든 climb → 6초 지나면 '바운스 떨어짐'으로 전환
+        # ⭐ 드래그로 만든 climb 유지
         if self.is_climbing and self.climb_locked_from_drag and not self.dragging:
             if now < self.climb_lock_expire:
                 self._pin_climb_to_wall()
                 return
             else:
-                # ⭐ climb 끝났으니 바운스 낙하로 전환
+                # 6초 끝 → 바운스 낙하로 전환
                 self.climb_locked_from_drag = False
                 self.is_climbing = False
                 self.climb_side = None
-                self.manual_drop = True     # 수동 낙하 모드 → 바운스 로직 탑승
+                self.manual_drop = True     # ⭐ 떨어질 땐 무조건 수동 낙하
                 self.free_bounce = False
                 self.vy = 0.0
                 self.bounce_count = 0
-                # 이대로 아래 중력 로직으로 내려감
+                # 밑의 중력 로직에서 실제로 떨어지게 함
 
         desk = self._desktop_rect()
         g = self.geometry()
@@ -785,7 +789,7 @@ class Pet(QtWidgets.QMainWindow):
             self._update_free_bounce()
             return
 
-        # 2) 중력
+        # 2) 중력 / 수동낙하
         if not self.dragging:
             if self.manual_drop:
                 self.vy += GRAVITY
@@ -823,6 +827,10 @@ class Pet(QtWidgets.QMainWindow):
                     self.vy = 0.0
                     self.move(g.x(), bottom_win)
 
+        # ⭐ 여기 추가: 떨어지는 중이면(=manual_drop) 다른 이동 로직 금지
+        if self.manual_drop:
+            return
+
         if self.dragging:
             return
 
@@ -855,7 +863,7 @@ class Pet(QtWidgets.QMainWindow):
                 self.set_action(want, suppress_bounce=False)
             return
 
-        # 4) 랜덤 이동 (이제 여기서는 climb 안 함)
+        # 4) 랜덤 이동 (클라임 자동 전환 없음)
         if self.random_walk and not self.active_temp_action:
             vx = getattr(self, "rw_vx", None)
             if vx is None or vx == 0:

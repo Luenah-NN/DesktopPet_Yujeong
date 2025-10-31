@@ -641,39 +641,62 @@ class Pet(QtWidgets.QMainWindow):
 
     # ✅ 여기서부터: 랜덤 이동 중 클릭/더블클릭 → fall
     def _play_walk_fall(self, direction: str):
-        """direction: 'left' or 'right'"""
+        """랜덤 이동 중 클릭/더블클릭 → 잠깐 넘어지는 모션"""
         fall_action = "fall_left" if direction == "left" else "fall_right"
         if fall_action not in self.animations:
             return
-        # 전체 길이 계산 (원본 딜레이 합산)
+
+        # 1) 이 모션 도는 동안에는 랜덤 이동이 덮어쓰지 못하도록 막아야 함
+        now = time.monotonic()
+
+        # (1) 원본 fall GIF 길이 계산
         raw = self.raw_animations.get(fall_action)
         if raw:
-            total_sec = sum(d for (_pm, d) in raw)
+            total_sec = sum(d for (_pm, d) in raw)   # d는 이미 초 단위로 들어와 있음
         else:
-            total_sec = 1.2  # 기본값
+            total_sec = 1.2  # fallback
+
+        # (2) 지금 랜덤 이동 상태인지 기록해뒀다가 끝나면 복구
+        was_random = self.random_walk
+        self.random_walk = False
+
+        # (3) temp 액션으로 세팅해두면 update_loop가 건드리지 않음
         self.temp_token += 1
         tok = self.temp_token
+        self.active_temp_action = fall_action
+        self.force_action_until = now + total_sec
 
-        # fall 시작
+        # 2) 모션 시작
         self.set_action(fall_action, force=True, suppress_bounce=True)
         self.manual_drop = False
         self.free_bounce = False
         self.vx = 0.0
         self.vy = 0.0
 
+        # 3) 끝나면 원래 상태로 복귀
         def _end_fall():
-            # 토큰 바뀌었으면 무시
+            # fall 도는 동안에 다른 temp가 들어왔으면 무시
             if tok != self.temp_token:
                 return
-            # 여전히 랜덤 이동 중이면 원래 방향으로 복귀
-            if self.random_walk:
+
+            self.active_temp_action = None
+            self.force_action_until = 0.0
+
+            # 끝날 때 랜덤 이동이 여전히 켜져있던 상황이었으면 복구
+            if was_random:
+                # 방향은 fall할 때의 방향으로 다시 설정
                 if direction == "left":
+                    self.random_walk = True
+                    self.rw_vx = -2    # 왼쪽으로 다시 걷기
                     self.set_action("walk_left", force=True, suppress_bounce=False)
                 else:
+                    self.random_walk = True
+                    self.rw_vx = 2     # 오른쪽으로 다시 걷기
                     self.set_action("walk_right", force=True, suppress_bounce=False)
             else:
-                # 랜덤 이동이 아니면 idle로
+                # 랜덤이동 아니면 idle로
                 self.set_action("idle", force=True, suppress_bounce=False)
+
         QtCore.QTimer.singleShot(int(total_sec * 1000), _end_fall)
 
     # ===== 마우스 =====

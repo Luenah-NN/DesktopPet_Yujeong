@@ -106,7 +106,6 @@ def desktop_virtual_rect():
 # ==========================
 class FullScreenOverlay(QtWidgets.QWidget):
     def __init__(self, parent=None):
-        # frameless + always on top + tool + transparent
         super().__init__(parent, QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint | QtCore.Qt.Tool)
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
         self.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
@@ -140,7 +139,6 @@ class FullScreenOverlay(QtWidgets.QWidget):
         self.sub_label.setText(sub)
         self.sub_label.adjustSize()
 
-        # 화면 좌측 위가 아니라 중앙 위쪽에 살짝
         x = rect.x() + 50
         y = rect.y() + 40
         self.title_label.move(x, y)
@@ -168,9 +166,7 @@ class PetManager(QtCore.QObject):
         super().__init__()
         self.app = app
         self.pets = []
-        # ✅ 미니게임 중엔 펫 추가 금지
         self.game_lock = False
-        # ✅ 전체화면 오버레이 1개
         self.overlay = FullScreenOverlay()
         self.overlay.hide()
 
@@ -244,22 +240,17 @@ class Pet(QtWidgets.QMainWindow):
         self.climb_locked_from_drag = False
         self.climb_lock_expire = 0.0
 
-        # ✅ 청소 모드
         self.clean_timer   = QtCore.QTimer(self)
         self.clean_timer.setInterval(6000)
         self.clean_timer.timeout.connect(self._cleaning_step)
         self.clean_vx      = 0
 
-        # ✅ 미니게임 타이머 (20fps)
         self.game_timer = QtCore.QTimer(self)
         self.game_timer.setInterval(GAME_TICK_MS)
         self.game_timer.timeout.connect(self._game_tick)
         self.game_paused = False
-
-        # 미니게임용 임시 위젯들 (떨어지는 아이템, 장애물 등)
         self.game_widgets = []
 
-        # 디코딩
         self._predecode_all()
         self._rebuild_scaled_cache()
 
@@ -285,7 +276,7 @@ class Pet(QtWidgets.QMainWindow):
 
         self.follow_mouse  = False
         self.random_walk   = False
-        self.mode          = "normal"  # dance / sleep / exercise / cleaning / game_*
+        self.mode          = "normal"
         self.menu_open     = False
 
         self.active_temp_action = None
@@ -317,9 +308,7 @@ class Pet(QtWidgets.QMainWindow):
         self.tick.timeout.connect(self.update_loop)
         self.tick.start(16)
 
-    # ==========================
-    # 화면/디스플레이
-    # ==========================
+    # ===== 화면 =====
     def _desktop_rect(self):
         if self.use_virtual_desktop:
             return desktop_virtual_rect()
@@ -329,9 +318,7 @@ class Pet(QtWidgets.QMainWindow):
         scr = QtWidgets.QApplication.primaryScreen()
         return scr.availableGeometry() if scr else QtCore.QRect(0,0,1920,1080)
 
-    # ==========================
-    # 디코딩
-    # ==========================
+    # ===== 디코딩 =====
     def _predecode_all(self):
         base = BASE_DIR / "assets" / CHAR_NAME
         for action, rel in ACTIONS.items():
@@ -417,9 +404,7 @@ class Pet(QtWidgets.QMainWindow):
             frames.append(pm); delays.append(0.05)
         return frames, delays, max_w, max_h
 
-    # ==========================
-    # 바닥
-    # ==========================
+    # ===== 바닥 =====
     def _floor_y_window(self):
         desk = self._desktop_rect()
         return desk.y() + desk.height() - self.height()
@@ -444,9 +429,7 @@ class Pet(QtWidgets.QMainWindow):
         self.vy = 0.0
         self.bounce_count = 0
 
-    # ==========================
-    # 메뉴
-    # ==========================
+    # ===== 메뉴 =====
     def _make_menu(self):
         self.menu = QtWidgets.QMenu(self)
         self.act_follow = self.menu.addAction("마우스 따라가기")
@@ -489,7 +472,6 @@ class Pet(QtWidgets.QMainWindow):
         self.act_multi.setCheckable(True)
 
     def contextMenuEvent(self, ev):
-        # 게임 중에는 메뉴 띄우지 않음
         if self.mode and self.mode.startswith("game_"):
             return
         self.menu_open = True
@@ -544,7 +526,6 @@ class Pet(QtWidgets.QMainWindow):
                 self._exit_modes()
                 self._start_cleaning_mode()
 
-        # ✅ 미니게임
         elif action == self.act_game_snack:
             self._start_game_snack()
         elif action == self.act_game_obstacle:
@@ -607,9 +588,7 @@ class Pet(QtWidgets.QMainWindow):
             self._stop_cleaning_mode()
         self.mode = "normal"
 
-    # ==========================
-    # 스케일/거인화
-    # ==========================
+    # ===== 스케일/거인화 =====
     def _set_scale(self, new_scale: float):
         self.scale = max(0.25, min(5.5, new_scale))
         self._rebuild_scaled_cache()
@@ -659,16 +638,13 @@ class Pet(QtWidgets.QMainWindow):
         self.setFixedSize(spm.width()+WINDOW_PAD, spm.height()+WINDOW_PAD)
         self._snap_floor_force()
 
-    # ==========================
-    # 액션
-    # ==========================
+    # ===== 액션 =====
     def set_action(self, key, force=False, suppress_bounce=True):
         if self.giant_animating and not force:
             return
         if self.mode in ("dance","sleep","exercise","cleaning") and not force:
             return
         if self.mode and self.mode.startswith("game_") and not force:
-            # 게임 중에는 강제 호출만 허용
             return
         if not force and key == self.current_action:
             return
@@ -758,7 +734,6 @@ class Pet(QtWidgets.QMainWindow):
                 self.set_action("idle", force=True, suppress_bounce=True)
         QtCore.QTimer.singleShot(ms, _end)
 
-    # 랜덤이동 중 fall
     def _play_walk_fall(self, direction: str):
         fall_action = "fall_left" if direction == "left" else "fall_right"
         if fall_action not in self.animations:
@@ -801,11 +776,8 @@ class Pet(QtWidgets.QMainWindow):
                 self.set_action("idle", force=True, suppress_bounce=False)
         QtCore.QTimer.singleShot(int(total_sec * 1000), _end_fall)
 
-    # ==========================
-    # 마우스
-    # ==========================
+    # ===== 마우스 =====
     def mousePressEvent(self, ev):
-        # ✅ 미니게임 중 입력
         if self.mode == "game_obstacle":
             if ev.button() == QtCore.Qt.LeftButton:
                 self._game_obstacle_click()
@@ -825,7 +797,6 @@ class Pet(QtWidgets.QMainWindow):
 
     def mouseMoveEvent(self, ev):
         if self.mode and self.mode.startswith("game_"):
-            # 게임 중엔 드래그로 안 움직임
             return
         if self.giant_animating:
             return
@@ -925,7 +896,6 @@ class Pet(QtWidgets.QMainWindow):
         self._do_single_click()
 
     def _do_single_click(self):
-        # 랜덤걷기 중이면 fall
         if self.random_walk and self.current_action == "walk_left":
             self._play_walk_fall("left")
             return
@@ -947,9 +917,7 @@ class Pet(QtWidgets.QMainWindow):
             return
         self._play_temp("angry", 6000, stop_during=False)
 
-    # ==========================
-    # 드래그 속도
-    # ==========================
+    # ===== 드래그 속도 =====
     def _record_drag(self, gpos: QtCore.QPoint):
         self.drag_trace.append((QtCore.QPoint(gpos), time.monotonic()))
 
@@ -977,9 +945,7 @@ class Pet(QtWidgets.QMainWindow):
             self.manual_drop = True
             self.bounce_count = 0
 
-    # ==========================
-    # 운동
-    # ==========================
+    # ===== 운동 =====
     def _exercise_next(self):
         if self.mode != "exercise":
             self.exercise_timer.stop()
@@ -987,9 +953,7 @@ class Pet(QtWidgets.QMainWindow):
         self.exercise_idx = (self.exercise_idx + 1) % len(self.exercise_cycle)
         self.set_action(self.exercise_cycle[self.exercise_idx], force=True, suppress_bounce=True)
 
-    # ==========================
-    # 청소 모드
-    # ==========================
+    # ===== 청소 모드 =====
     def _start_cleaning_mode(self):
         self.mode = "cleaning"
         self.clean_timer.start()
@@ -1057,14 +1021,11 @@ class Pet(QtWidgets.QMainWindow):
         self.vy = 0.0
         self.bounce_count = 0
 
-    # ==========================
-    # 메인 루프
-    # ==========================
+    # ===== 메인 루프 =====
     def update_loop(self):
         now = time.monotonic()
         self._update_animation(now)
 
-        # ✅ 게임 모드에선 여기서부터 일반 루프 안 돌게
         if self.mode and self.mode.startswith("game_"):
             return
 
@@ -1196,9 +1157,7 @@ class Pet(QtWidgets.QMainWindow):
             if self.current_action != "idle":
                 self.set_action("idle", suppress_bounce=False)
 
-    # ==========================
-    # 사방 바운스
-    # ==========================
+    # ===== 사방 바운스 =====
     def _update_free_bounce(self):
         desk = self._desktop_rect()
         g = self.geometry()
@@ -1238,9 +1197,7 @@ class Pet(QtWidgets.QMainWindow):
             self.bounce_count = 0
             self.vx = 0.0
 
-    # ==========================
-    # 키보드 (ESC/P)
-    # ==========================
+    # ===== 키보드 =====
     def keyPressEvent(self, ev):
         if self.mode and self.mode.startswith("game_"):
             if ev.key() == QtCore.Qt.Key_Escape:
@@ -1255,10 +1212,7 @@ class Pet(QtWidgets.QMainWindow):
                 return
         super().keyPressEvent(ev)
 
-    # ==========================
-    # ======== 미니게임 =========
-    # ==========================
-    # --- 공통 ---
+    # ===== 미니게임 공통 =====
     def _enter_game_mode(self, mode_name: str):
         self._exit_modes()
         self.mode = mode_name
@@ -1268,12 +1222,10 @@ class Pet(QtWidgets.QMainWindow):
         self.mgr.overlay.hide_text()
 
     def _exit_game_mode(self):
-        # 위젯 정리
         for w in self.game_widgets:
             w.setParent(None)
             w.deleteLater()
         self.game_widgets = []
-
         self.game_timer.stop()
         self.mode = "normal"
         self.mgr.game_lock = False
@@ -1302,9 +1254,7 @@ class Pet(QtWidgets.QMainWindow):
         elif self.mode == "game_heading":
             self._game_heading_tick()
 
-    # -------------------------
-    # 1) 간식먹기
-    # -------------------------
+    # ===== 간식먹기 =====
     def _start_game_snack(self):
         self._enter_game_mode("game_snack")
         self.set_action("idle", force=True, suppress_bounce=True)
@@ -1312,19 +1262,18 @@ class Pet(QtWidgets.QMainWindow):
         self.move(scr.center().x() - self.width()//2,
                   scr.bottom() - self.height() - 2)
 
-        self.snack_items = []  # {kind, x, y, vy, widget}
+        self.snack_items = []
         self.snack_score = 0
         self.snack_life  = 3.0
         self.snack_elapsed = 0.0
         self.snack_spawn_cd = 0.0
         self.snack_fall_speed = 3.0
         self.snack_bomb_prob  = 0.12
-        self.snack_growing = False  # 버섯 먹는 중
+        self.snack_growing = False
         self.mgr.overlay.show_text("SCORE: 0", "♥♥♥")
 
     def _spawn_snack_item(self):
         scr = self._desktop_rect()
-        kind = "bread"
         r = random.random()
         if r < self.snack_bomb_prob:
             kind = "bomb"
@@ -1338,7 +1287,6 @@ class Pet(QtWidgets.QMainWindow):
                 kind = "bread"
         x = random.randint(scr.x(), scr.x() + scr.width() - SNACK_ITEM_SIZE)
         y = scr.y() - SNACK_ITEM_SIZE - 4
-        # 위젯
         w = QtWidgets.QLabel(self)
         if kind == "bomb":
             pm = self._make_game_pix(QtGui.QColor(220,30,30))
@@ -1369,25 +1317,21 @@ class Pet(QtWidgets.QMainWindow):
         scr = self._desktop_rect()
         floor_y = scr.bottom() - self.height() - 2
 
-        # 마우스 포지셔닝
         pos = QtGui.QCursor.pos()
         pet_x = pos.x() - self.width()//2
         pet_x = max(scr.x(), min(pet_x, scr.right()-self.width()))
         self.move(pet_x, floor_y)
 
-        # 30초마다 난이도 증가
         if int(self.snack_elapsed) % 30 == 0 and int(self.snack_elapsed) != 0:
             self.snack_bomb_prob = min(self.snack_bomb_prob + 0.02, 0.55)
             self.snack_fall_speed = min(self.snack_fall_speed + 0.05, 6.0)
 
-        # 스폰
         if not self.snack_growing:
             self.snack_spawn_cd -= dt
             if self.snack_spawn_cd <= 0:
                 self._spawn_snack_item()
                 self.snack_spawn_cd = 0.9
 
-        # 아이템 이동
         pet_rect = self.geometry()
         missed_bread = 0
         new_items = []
@@ -1401,7 +1345,6 @@ class Pet(QtWidgets.QMainWindow):
                 collided.append(it)
                 continue
             if it["y"] > scr.bottom():
-                # 바닥으로 떨어짐
                 if it["kind"] == "bread":
                     missed_bread += 1
                 it["w"].hide(); it["w"].deleteLater()
@@ -1410,7 +1353,6 @@ class Pet(QtWidgets.QMainWindow):
                 new_items.append(it)
         self.snack_items = new_items
 
-        # 충돌 처리 (폭탄 우선)
         bombs = [c for c in collided if c["kind"] == "bomb"]
         if bombs:
             for b in bombs:
@@ -1477,9 +1419,7 @@ class Pet(QtWidgets.QMainWindow):
         self.set_action("angry", force=True, suppress_bounce=True)
         self.mgr.overlay.show_text("GAME OVER", f"SCORE: {self.snack_score}")
 
-    # -------------------------
-    # 2) 장애물 피하기
-    # -------------------------
+    # ===== 장애물 피하기 =====
     def _start_game_obstacle(self):
         self._enter_game_mode("game_obstacle")
         self.set_action("run_right", force=True, suppress_bounce=True)
@@ -1526,15 +1466,12 @@ class Pet(QtWidgets.QMainWindow):
         scr = self._desktop_rect()
         floor_y = scr.bottom() - self.height() - 2
 
-        # 속도 증가
         if int(self.obst_elapsed) % 20 == 0 and int(self.obst_elapsed) != 0:
             self.obst_speed = min(self.obst_speed + 0.6, 15.0)
 
-        # 스폰
         if random.random() < OBSTACLE_MIN_INTERVAL:
             self._spawn_obstacle()
 
-        # 점프 물리
         if self.obst_in_air:
             self.obst_vy += self.obst_gravity
             self.obst_vy = min(self.obst_vy, self.obst_max_fall)
@@ -1546,10 +1483,8 @@ class Pet(QtWidgets.QMainWindow):
         else:
             self.obst_y = floor_y
 
-        # 위치 적용
         self.move(self.x(), self.obst_y)
 
-        # 장애물 이동/충돌
         pet_rect = self.geometry()
         new_obs = []
         for ob in self.obstacles:
@@ -1571,9 +1506,7 @@ class Pet(QtWidgets.QMainWindow):
         self.set_action("fall_right", force=True, suppress_bounce=True)
         self.mgr.overlay.show_text("GAME OVER", f"SCORE: {self.obst_score:.1f}")
 
-    # -------------------------
-    # 3) 헤딩하기
-    # -------------------------
+    # ===== 헤딩하기 =====
     def _start_game_heading(self):
         self._enter_game_mode("game_heading")
         self.set_action("jumping_jacks", force=True, suppress_bounce=True)
@@ -1597,14 +1530,12 @@ class Pet(QtWidgets.QMainWindow):
         floor_real = scr.bottom()
         floor_ball = floor_real - 4
 
-        # 마우스 포지셔닝
         pos = QtGui.QCursor.pos()
         pet_x = pos.x() - self.width()//2
         pet_x = max(scr.left(), min(pet_x, scr.right()-self.width()))
         pet_y = scr.bottom() - self.height() - 2
         self.move(pet_x, pet_y)
 
-        # 공 물리
         b = self.head_ball
         b["vy"] += self.head_gravity
         b["y"] += b["vy"]
@@ -1613,7 +1544,6 @@ class Pet(QtWidgets.QMainWindow):
             self._game_heading_over()
             return
 
-        # 머리 충돌
         pet_rect = self.geometry()
         head_rect = QtCore.QRect(pet_rect.x()+int(self.width()*0.15),
                                  pet_rect.y(),
@@ -1634,15 +1564,19 @@ class Pet(QtWidgets.QMainWindow):
         self.mgr.overlay.show_text("GAME OVER", f"SCORE: {self.head_score}")
 
 
-# ==========================
 def main():
+    # DPI 옵션 설정
     QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
     QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
+
+    app = QtWidgets.QApplication(sys.argv)
+
+    # 💡 여기서 QtCore.QApplication 이 아니라 QtCore.Qt 의 enum 을 써야 함
     if hasattr(QtCore.Qt, "HighDpiScaleFactorRoundingPolicy"):
         QtWidgets.QApplication.setHighDpiScaleFactorRoundingPolicy(
-            QtCore.QApplication.HighDpiScaleFactorRoundingPolicy.PassThrough
+            QtCore.Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
         )
-    app = QtWidgets.QApplication(sys.argv)
+
     mgr = PetManager(app)
     mgr.spawn()
     sys.exit(app.exec_())

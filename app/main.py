@@ -101,6 +101,66 @@ def desktop_virtual_rect():
     return scr.virtualGeometry() if scr else QtCore.QRect(0, 0, 1920, 1080)
 
 
+# ==========================
+# 전체 화면 오버레이
+# ==========================
+class FullScreenOverlay(QtWidgets.QWidget):
+    def __init__(self, parent=None):
+        # frameless + always on top + tool + transparent
+        super().__init__(parent, QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint | QtCore.Qt.Tool)
+        self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
+        self.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+        self.setWindowFlag(QtCore.Qt.WindowDoesNotAcceptFocus, True)
+
+        self.title_label = QtWidgets.QLabel(self)
+        self.sub_label   = QtWidgets.QLabel(self)
+
+        self.title_label.setStyleSheet(
+            "QLabel { color: white; font-size: 42px; font-weight: 700; }"
+        )
+        self.sub_label.setStyleSheet(
+            "QLabel { color: white; font-size: 26px; }"
+        )
+
+        self.title_label.hide()
+        self.sub_label.hide()
+
+        self.update_geometry()
+
+    def update_geometry(self):
+        rect = desktop_virtual_rect()
+        self.setGeometry(rect)
+
+    def show_text(self, title: str, sub: str = ""):
+        self.update_geometry()
+        rect = self.geometry()
+
+        self.title_label.setText(title)
+        self.title_label.adjustSize()
+        self.sub_label.setText(sub)
+        self.sub_label.adjustSize()
+
+        # 화면 좌측 위가 아니라 중앙 위쪽에 살짝
+        x = rect.x() + 50
+        y = rect.y() + 40
+        self.title_label.move(x, y)
+        self.title_label.show()
+
+        if sub:
+            self.sub_label.move(x, y + self.title_label.height() + 10)
+            self.sub_label.show()
+        else:
+            self.sub_label.hide()
+
+        self.show()
+        self.raise_()
+
+    def hide_text(self):
+        self.title_label.hide()
+        self.sub_label.hide()
+        self.hide()
+
+
 class PetManager(QtCore.QObject):
     MAX_PETS = 16
 
@@ -110,6 +170,9 @@ class PetManager(QtCore.QObject):
         self.pets = []
         # ✅ 미니게임 중엔 펫 추가 금지
         self.game_lock = False
+        # ✅ 전체화면 오버레이 1개
+        self.overlay = FullScreenOverlay()
+        self.overlay.hide()
 
     def spawn(self, pos=None):
         if self.game_lock:
@@ -156,14 +219,6 @@ class Pet(QtWidgets.QMainWindow):
         self.label.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
         self.label.setContentsMargins(0,0,0,0)
         self.setCentralWidget(self.label)
-
-        # ✅ 미니게임 오버레이 (텍스트)
-        self.game_overlay = QtWidgets.QLabel(self)
-        self.game_overlay.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
-        self.game_overlay.setStyleSheet(
-            "QLabel { background: rgba(0,0,0,140); color: white; font-size: 15px; padding: 6px; border-radius: 6px; }"
-        )
-        self.game_overlay.hide()
 
         self.use_virtual_desktop = False
 
@@ -661,7 +716,6 @@ class Pet(QtWidgets.QMainWindow):
             self.setMask(pix.createMaskFromColor(QtGui.QColor(255,255,255), QtCore.Qt.MaskOutColor))
         else:
             self.clearMask()
-        self.game_overlay.resize(self.size())
 
     def _apply_current_frame(self):
         frames = self.animations.get(self.current_action)
@@ -756,7 +810,7 @@ class Pet(QtWidgets.QMainWindow):
             if ev.button() == QtCore.Qt.LeftButton:
                 self._game_obstacle_click()
             return
-        if self.mode.startswith("game_"):
+        if self.mode and self.mode.startswith("game_"):
             return
 
         if ev.button() == QtCore.Qt.LeftButton:
@@ -770,7 +824,7 @@ class Pet(QtWidgets.QMainWindow):
             self.drag_trace.clear()
 
     def mouseMoveEvent(self, ev):
-        if self.mode.startswith("game_"):
+        if self.mode and self.mode.startswith("game_"):
             # 게임 중엔 드래그로 안 움직임
             return
         if self.giant_animating:
@@ -813,7 +867,7 @@ class Pet(QtWidgets.QMainWindow):
                     self.climb_lock_expire = time.monotonic() + self.CLIMB_HOLD_SEC
 
     def mouseReleaseEvent(self, ev):
-        if self.mode.startswith("game_"):
+        if self.mode and self.mode.startswith("game_"):
             return
         if ev.button() != QtCore.Qt.LeftButton:
             return
@@ -859,14 +913,14 @@ class Pet(QtWidgets.QMainWindow):
             self.move(desk.x() + desk.width() - self.width(), y)
 
     def mouseDoubleClickEvent(self, ev):
-        if self.mode.startswith("game_"):
+        if self.mode and self.mode.startswith("game_"):
             return
         if ev.button() == QtCore.Qt.LeftButton:
             self.single_click_timer.stop()
             self._do_double_click()
 
     def _trigger_single_click(self):
-        if self.mode.startswith("game_"):
+        if self.mode and self.mode.startswith("game_"):
             return
         self._do_single_click()
 
@@ -1195,9 +1249,9 @@ class Pet(QtWidgets.QMainWindow):
             if ev.key() == QtCore.Qt.Key_P:
                 self.game_paused = not self.game_paused
                 if self.game_paused:
-                    self._show_game_overlay("PAUSE", "")
+                    self.mgr.overlay.show_text("PAUSE", "")
                 else:
-                    self._hide_game_overlay()
+                    self.mgr.overlay.hide_text()
                 return
         super().keyPressEvent(ev)
 
@@ -1211,7 +1265,7 @@ class Pet(QtWidgets.QMainWindow):
         self.mgr.game_lock = True
         self.game_paused = False
         self.game_timer.start()
-        self._hide_game_overlay()
+        self.mgr.overlay.hide_text()
 
     def _exit_game_mode(self):
         # 위젯 정리
@@ -1223,18 +1277,9 @@ class Pet(QtWidgets.QMainWindow):
         self.game_timer.stop()
         self.mode = "normal"
         self.mgr.game_lock = False
-        self._hide_game_overlay()
+        self.mgr.overlay.hide_text()
         self._snap_floor_force()
         self.set_action("idle", force=True, suppress_bounce=True)
-
-    def _show_game_overlay(self, title: str, sub: str):
-        self.game_overlay.setText(title + ("\n" + sub if sub else ""))
-        self.game_overlay.adjustSize()
-        self.game_overlay.move(10, 10)
-        self.game_overlay.show()
-
-    def _hide_game_overlay(self):
-        self.game_overlay.hide()
 
     def _make_game_pix(self, color: QtGui.QColor, size: int = SNACK_ITEM_SIZE):
         pm = QtGui.QPixmap(size, size)
@@ -1275,8 +1320,7 @@ class Pet(QtWidgets.QMainWindow):
         self.snack_fall_speed = 3.0
         self.snack_bomb_prob  = 0.12
         self.snack_growing = False  # 버섯 먹는 중
-        self._hide_game_overlay()
-        self._show_game_overlay("SCORE: 0", "♥♥♥")
+        self.mgr.overlay.show_text("SCORE: 0", "♥♥♥")
 
     def _spawn_snack_item(self):
         scr = self._desktop_rect()
@@ -1333,7 +1377,6 @@ class Pet(QtWidgets.QMainWindow):
 
         # 30초마다 난이도 증가
         if int(self.snack_elapsed) % 30 == 0 and int(self.snack_elapsed) != 0:
-            # 아주 살짝만
             self.snack_bomb_prob = min(self.snack_bomb_prob + 0.02, 0.55)
             self.snack_fall_speed = min(self.snack_fall_speed + 0.05, 6.0)
 
@@ -1382,7 +1425,6 @@ class Pet(QtWidgets.QMainWindow):
                 elif c["kind"] == "heart":
                     self.snack_life = min(self.snack_life + 1.0, 3.0)
                 elif c["kind"] == "mushroom":
-                    # 커지는 동안 멈춤
                     self.snack_growing = True
                     self._snack_grow_anim()
                 if c["w"] in self.game_widgets:
@@ -1392,9 +1434,8 @@ class Pet(QtWidgets.QMainWindow):
         if missed_bread > 0:
             self.snack_life -= 0.5 * missed_bread
 
-        # 생명/스코어 표시
         life_txt = self._snack_life_text(self.snack_life)
-        self._show_game_overlay(f"SCORE: {self.snack_score}", life_txt)
+        self.mgr.overlay.show_text(f"SCORE: {self.snack_score}", life_txt)
 
         if self.snack_life <= 0:
             self.snack_life = 0
@@ -1434,7 +1475,7 @@ class Pet(QtWidgets.QMainWindow):
     def _game_snack_over(self):
         self.game_timer.stop()
         self.set_action("angry", force=True, suppress_bounce=True)
-        self._show_game_overlay("GAME OVER", f"SCORE: {self.snack_score}")
+        self.mgr.overlay.show_text("GAME OVER", f"SCORE: {self.snack_score}")
 
     # -------------------------
     # 2) 장애물 피하기
@@ -1458,7 +1499,7 @@ class Pet(QtWidgets.QMainWindow):
         self.obst_elapsed = 0.0
         self.obstacles = []
         self.obst_score = 0.0
-        self._show_game_overlay("SCORE: 0.0", "클릭=점프, 공중에서 한 번 더=더블점프")
+        self.mgr.overlay.show_text("SCORE: 0.0", "클릭=점프, 공중에서 한 번 더=더블점프")
 
     def _game_obstacle_click(self):
         if not self.obst_in_air:
@@ -1488,11 +1529,6 @@ class Pet(QtWidgets.QMainWindow):
         # 속도 증가
         if int(self.obst_elapsed) % 20 == 0 and int(self.obst_elapsed) != 0:
             self.obst_speed = min(self.obst_speed + 0.6, 15.0)
-
-        # 스크롤
-        self.obst_scroll_x -= self.obst_speed * 0.5
-        if self.obst_scroll_x < -200:
-            self.obst_scroll_x += 200
 
         # 스폰
         if random.random() < OBSTACLE_MIN_INTERVAL:
@@ -1528,12 +1564,12 @@ class Pet(QtWidgets.QMainWindow):
                 self.obst_score += 5
         self.obstacles = new_obs
         self.obst_score += self.obst_speed * 0.02
-        self._show_game_overlay(f"SCORE: {self.obst_score:.1f}", "클릭=점프, 공중=더블점프")
+        self.mgr.overlay.show_text(f"SCORE: {self.obst_score:.1f}", "클릭=점프, 공중=더블점프")
 
     def _game_obstacle_over(self):
         self.game_timer.stop()
         self.set_action("fall_right", force=True, suppress_bounce=True)
-        self._show_game_overlay("GAME OVER", f"SCORE: {self.obst_score:.1f}")
+        self.mgr.overlay.show_text("GAME OVER", f"SCORE: {self.obst_score:.1f}")
 
     # -------------------------
     # 3) 헤딩하기
@@ -1553,7 +1589,7 @@ class Pet(QtWidgets.QMainWindow):
         self.head_gravity = 0.35
         self.head_bounce  = 1.02
         self.head_score   = 0
-        self._show_game_overlay("SCORE: 0", "헤딩하기")
+        self.mgr.overlay.show_text("SCORE: 0", "헤딩하기")
 
     def _game_heading_tick(self):
         dt = GAME_TICK_MS / 1000.0
@@ -1590,12 +1626,13 @@ class Pet(QtWidgets.QMainWindow):
             self.head_bounce  = min(self.head_bounce + 0.015, 1.35)
             self.head_score  += 1
 
-        self._show_game_overlay(f"SCORE: {self.head_score}", "헤딩하기")
+        self.mgr.overlay.show_text(f"SCORE: {self.head_score}", "헤딩하기")
 
     def _game_heading_over(self):
         self.game_timer.stop()
         self.set_action("angry", force=True, suppress_bounce=True)
-        self._show_game_overlay("GAME OVER", f"SCORE: {self.head_score}")
+        self.mgr.overlay.show_text("GAME OVER", f"SCORE: {self.head_score}")
+
 
 # ==========================
 def main():
@@ -1603,7 +1640,7 @@ def main():
     QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
     if hasattr(QtCore.Qt, "HighDpiScaleFactorRoundingPolicy"):
         QtWidgets.QApplication.setHighDpiScaleFactorRoundingPolicy(
-            QtCore.Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+            QtCore.QApplication.HighDpiScaleFactorRoundingPolicy.PassThrough
         )
     app = QtWidgets.QApplication(sys.argv)
     mgr = PetManager(app)
